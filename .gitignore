@@ -8,7 +8,8 @@ vendor/
 # Local state from a private build tool. Nothing in this repository reads it.
 .freebuff/
 
-# Written by tools/fetch-projector.js and tools/fetch-flash-browser.js for the platform being
-# built; packed into the app.
+# Written by tools/fetch-projector.js, tools/fetch-flash-browser.js and
+# tools/build-flash-preload.js for the platform being built; packed into the app.
 lib/projector.integrity.json
 lib/flashbrowser.integrity.json
+lib/flashpreload.integrity.json

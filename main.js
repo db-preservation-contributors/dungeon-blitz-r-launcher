@@ -14,7 +14,15 @@ const { GameHost } = require('./lib/gameHost');
 const { findFlashBrowser, prepareFlashBrowserLaunch, verifyFlashBrowser } = require('./lib/flashBrowser');
 const { openGameTunnel } = require('./lib/gameTunnel');
 const { verifyProjector } = require('./lib/integrity');
-const { findProjector, findVendoredProjector, isChosenProjector, prepareLaunch, resolveSwfUrl } = require('./lib/projector');
+const {
+    findFlashPreload,
+    findProjector,
+    findVendoredProjector,
+    isChosenProjector,
+    prepareLaunch,
+    resolveSwfUrl,
+    verifyFlashPreload
+} = require('./lib/projector');
 const { keepGameTitle } = require('./lib/windowTitle');
 const { describeWindows, unsupportedArchitectureMessage, unsupportedWindowsMessage } = require('./lib/windowsSupport');
 const { PresenceBridge } = require('./lib/presence');
@@ -707,10 +715,24 @@ async function launchProjector(serverUrl, settings) {
         }
     }
 
+    // On Linux, the libraries the build loads into Flash Player (native_flash/), checked the
+    // same way: they run inside it.
+    const preload = process.platform === 'linux' ? findFlashPreload() : null;
+    if (preload && app.isPackaged) {
+        const check = verifyFlashPreload(preload.directory);
+        if (!check.ok) {
+            console.log(`[Flash] REFUSED: ${check.reason}`);
+            return { ok: false, message: `${check.reason}. Reinstall the launcher to play.` };
+        }
+    }
+    if (preload) {
+        console.log(`[Flash] Preloading ${preload.libraries.join(', ')} from ${preload.directory}`);
+    }
+
     const swfUrl = await resolveSwfUrl(serverUrl);
     let launch;
     try {
-        launch = prepareLaunch(projector, swfUrl, { workDir: path.join(app.getPath('userData'), 'game') });
+        launch = prepareLaunch(projector, swfUrl, { workDir: path.join(app.getPath('userData'), 'game'), preload });
     } catch (error) {
         return { ok: false, message: `Flash Player could not be prepared: ${(error && error.message) || error}` };
     }

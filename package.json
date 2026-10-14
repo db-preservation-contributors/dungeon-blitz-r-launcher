@@ -13,7 +13,8 @@
     "start": "electron .",
     "fetch-projector": "node tools/fetch-projector.js",
     "fetch-flash-browser": "node tools/fetch-flash-browser.js",
-    "test": "node tools/test-presence.js && node tools/test-chat-relay.js && node tools/test-game-stats.js && node tools/test-damage-meter.js && node tools/test-linked-lobby.js && node tools/test-launcher-session-recovery.js && node tools/test-social-bridge.js && node tools/test-discord-ipc.js && node tools/test-launcher-status.js && node tools/test-install-location.js && node tools/test-package-files.js && node tools/test-updater.js && node tools/test-windows-support.js && node tools/test-projector.js && node tools/test-flash-browser.js && node tools/test-game-tunnel.js && node tools/test-discord-login-key.js",
+    "build-flash-preload": "node tools/build-flash-preload.js",
+    "test": "node tools/test-presence.js && node tools/test-chat-relay.js && node tools/test-game-stats.js && node tools/test-damage-meter.js && node tools/test-linked-lobby.js && node tools/test-launcher-session-recovery.js && node tools/test-social-bridge.js && node tools/test-discord-ipc.js && node tools/test-launcher-status.js && node tools/test-install-location.js && node tools/test-package-files.js && node tools/test-updater.js && node tools/test-windows-support.js && node tools/test-projector.js && node tools/test-flash-browser.js && node tools/test-game-tunnel.js && node tools/test-discord-login-key.js && node tools/test-flash-preload.js",
     "make-icons": "node tools/make-icons.js",
     "test-updater": "node tools/test-updater.js",
     "dist": "electron-builder",
@@ -24,7 +25,7 @@
     "predist:win": "node tools/fetch-projector.js --platform win32 && node tools/fetch-flash-browser.js --platform win32 --arch x64 && node tools/preflight.js --platform win32 --arch x64",
     "predist:win:ia32": "node tools/fetch-projector.js --platform win32 && node tools/fetch-flash-browser.js --platform win32 --arch ia32 && node tools/preflight.js --platform win32 --arch ia32",
     "predist:mac": "node tools/fetch-projector.js --platform darwin && node tools/fetch-flash-browser.js --platform darwin --arch x64 && node tools/preflight.js --platform darwin",
-    "predist:linux": "node tools/fetch-projector.js --platform linux && node tools/fetch-flash-browser.js --platform linux --arch x64 && node tools/preflight.js --platform linux",
+    "predist:linux": "node tools/fetch-projector.js --platform linux && node tools/build-flash-preload.js --platform linux && node tools/fetch-flash-browser.js --platform linux --arch x64 && node tools/preflight.js --platform linux",
     "build:bridge": "cmake -S native_bridge -B native_bridge/build -DCMAKE_BUILD_TYPE=Release && cmake --build native_bridge/build --config Release"
   },
   "devDependencies": {
@@ -74,6 +75,7 @@
         "filter": [
           "projector/${platform}/**/*",
           "flashbrowser/${platform}-${arch}/**/*",
+          "flashpreload/${platform}/**/*",
           "social/${platform}/**/*"
         ]
       }

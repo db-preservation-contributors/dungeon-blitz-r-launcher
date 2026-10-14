@@ -192,6 +192,48 @@ backend exists, so VDPAU does not open and Flash Player draws in software, as it
 any machine without VDPAU. A player whose driver does draw the game correctly can keep
 hardware drawing by starting the launcher with `DUNGEON_BLITZ_FLASH_VDPAU=1`.
 
+#### Frame rate on Linux
+
+The Linux Flash Player asks the kernel for its stack limit (`getrlimit`) many times per
+frame. Each ask is a system call. On a kernel that mitigates SRSO, the default on AMD Zen 1
+to 4, a system call costs about 200 ns. Profiled in a dungeon on a Ryzen 7 3700X, that one
+call took 40% of Flash Player's main thread, and the game ran at 15-30 fps.
+
+A process's limits only change when it sets them, so the answer can be kept.
+`native_flash/flash_rlimit_cache.c` does that: it answers `getrlimit` from memory and
+forgets the kept answer on `setrlimit`. The launcher loads it into Flash Player with
+`LD_PRELOAD`, and the same dungeon then runs at roughly 30-60 fps.
+
+Flash Player also paces itself with three GLib timers of 10 ms, and starts each step of a
+frame on a tick. A frame that runs a little past one tick waits for the next, so frame
+times came in two bands, 10-14 ms and 18-24 ms, and the main thread spent about a quarter
+of its time waiting. `native_flash/flash_short_tick.c` makes `g_timeout_add` timers of
+10 ms tick every 2 ms; other timers are left alone. Flash Player still decides on its own
+clock when a frame is due, so the game keeps its speed and its 100 fps cap. Standing still
+in the same spot of a dungeon, full screen at high quality: 78.5 fps before, 85.3 fps
+after, with the two-tick frames down from 21% to 0.5%.
+
+- `tools/build-flash-preload.js` compiles every `native_flash/*.c` into
+  `vendor/flashpreload/linux/` (`npm run build-flash-preload`; `predist:linux` and the
+  release workflow run it). It needs a C compiler and `readelf`.
+- Each library is checked as it is built. It must need nothing newer than glibc 2.17, and
+  a program without GLib must still start with it, even with `LD_BIND_NOW`: whatever Flash
+  Player starts inherits `LD_PRELOAD`. For the `getrlimit` cache, a shell started with it
+  must get its `getrlimit` and `setrlimit` from it and still see the kernel's limits.
+- Neither library looks anything up with `dlsym`, which moved to a newer glibc symbol
+  version in 2.34. The cache calls the kernel through `syscall`, and the short tick calls
+  GLib's `g_timeout_add_full`, which `g_timeout_add` is.
+- The folder is fingerprinted into `lib/flashpreload.integrity.json`, and a packaged
+  launcher checks it before every game, as it checks Flash Player.
+- The libraries go into `LD_PRELOAD` by bare name, with their folder first in
+  `LD_LIBRARY_PATH`. `LD_PRELOAD` splits on spaces, and the .deb installs into
+  `/opt/Dungeon Blitz R`. What the player already preloads, such as MangoHud, is kept.
+- `DUNGEON_BLITZ_FLASH_PRELOAD=0` starts Flash Player without them.
+
+```bash
+node tools/test-flash-preload.js
+```
+
 #### The window title
 
 FlashBrowser's window is the launcher's own app, so it simply keeps that title. In Flash
