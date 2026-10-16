@@ -55,11 +55,14 @@
       </div>
       <button id="play" type="button" class="db-play">Open the game</button>
 
-      <!-- Legacy: Adobe Flash Player 32, the standalone player, for players who see a delay
-           collecting loot in FlashBrowser (the button above, the default). Always offered. -->
+      <!-- The button above plays in Ruffle, the default: the game page with the Ruffle Flash
+           emulator, drawn on the GPU, in the launcher's own window. Legacy -- Adobe Flash
+           Player 32, the standalone player -- is always offered next; FlashBrowser -- the game
+           page with the Flash plugin -- wherever there is one (not on 32-bit Windows or Linux). -->
       <div id="alt-engine" class="alt-engine">
         <button id="play-projector" type="button" class="db-play-alt">Play Legacy (Adobe Flash Player 32)</button>
-        <span class="alt-engine__hint">Delay collecting loot? Play with Legacy.</span>
+        <button id="play-flashbrowser" type="button" class="db-play-alt">Play in FlashBrowser</button>
+        <span class="alt-engine__hint">Something wrong in the game? Try Legacy.</span>
       </div>
 
       <!-- Signing in is a one-time thing: once an account is known the button is replaced by

@@ -143,9 +143,33 @@ function testFindProjector() {
         }
         assert.strictEqual(projector.isChosenProjector(path.join(root, 'pepflashplayer64.dll')), false, 'a plugin is not a projector');
 
-        const launch = projector.prepareLaunch(found, 'http://a.example/p/cbp/DungeonBlitz.swf', { platform: 'win32', workDir: root });
-        assert.deepStrictEqual(launch.args, ['http://a.example/p/cbp/DungeonBlitz.swf'], 'the movie is the one argument');
+        const launch = projector.prepareLaunch(found, 'http://a.example/p/cbp/DungeonBlitz.swf', {
+            platform: 'win32',
+            workDir: root,
+            env: { DB_FLASH_RENDER: 'software' }
+        });
+        assert.deepStrictEqual(launch.args, ['http://a.example/p/cbp/DungeonBlitz.swf'], 'software rendering: the movie is the one argument');
         assert.ok(launch.command, 'there is something to execute');
+
+        // Windows renders direct by default, through a loader whose flags ask for it;
+        // DB_FLASH_RENDER picks another mode, and other systems keep software rendering.
+        assert.strictEqual(projector.flashRenderMode({}, 'win32'), 'direct', 'direct by default on Windows');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'software' }, 'win32'), '', 'software turns it off');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: ' GPU ' }, 'win32'), 'gpu');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'vulkan' }, 'win32'), 'direct', 'an unknown mode keeps the default');
+        assert.strictEqual(projector.flashRenderMode({}, 'darwin'), '', 'macOS keeps software rendering');
+        assert.strictEqual(projector.flashRenderMode({}, 'linux'), '');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'direct' }, 'darwin'), 'direct', 'unless asked');
+        const direct = projector.prepareLaunch(found, 'http://a.example/p/cbp/DungeonBlitz.swf', {
+            platform: 'win32',
+            workDir: root,
+            env: {}
+        });
+        const loaderPath = path.join(root, projector.WINDOWS_LOADER_FILE);
+        assert.deepStrictEqual(direct.args, [loaderPath], 'started on the loader file');
+        assert.strictEqual(direct.cwd, root);
+        assert.ok(fs.readFileSync(loaderPath).includes(Buffer.from([0x44, 0x11, 0x41, 0, 0, 0])), 'UseDirectBlit + UseNetwork');
+        assert.ok(fs.readFileSync(loaderPath).includes(Buffer.from('http://a.example/p/cbp/DungeonBlitz.swf')));
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -392,6 +416,9 @@ function testWindowTitle() {
     assert.ok(swf.includes(getUrl), 'getURL(game, "_level0")');
     assert.ok(swf.includes(Buffer.from([0x44, 0x11, 0x01, 0, 0, 0])), 'FileAttributes with UseNetwork');
     assert.throws(() => buildLoaderSwf('http://a\u0000b'), /NUL/);
+    assert.ok(buildLoaderSwf(url, { render: 'direct' }).includes(Buffer.from([0x44, 0x11, 0x41, 0, 0, 0])), 'UseDirectBlit');
+    assert.ok(buildLoaderSwf(url, { render: 'gpu' }).includes(Buffer.from([0x44, 0x11, 0x21, 0, 0, 0])), 'UseGPU');
+    assert.throws(() => buildLoaderSwf(url, { render: 'vulkan' }), /unknown render mode/);
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'db-title-'));
     try {

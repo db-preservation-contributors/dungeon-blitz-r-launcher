@@ -18,12 +18,15 @@ const {
     findFlashPreload,
     findProjector,
     findVendoredProjector,
+    flashRenderMode,
     isChosenProjector,
     prepareLaunch,
     resolveSwfUrl,
     verifyFlashPreload
 } = require('./lib/projector');
 const { keepGameTitle } = require('./lib/windowTitle');
+const { boostFlashTimer } = require('./lib/flashTimer');
+const ruffleWindow = require('./lib/ruffleWindow');
 const { describeWindows, unsupportedArchitectureMessage, unsupportedWindowsMessage } = require('./lib/windowsSupport');
 const { PresenceBridge } = require('./lib/presence');
 const { SocialBridge } = require('./lib/social');
@@ -143,11 +146,13 @@ function openDamageMeter() {
 // the page itself, so it needs none of this.
 const gameHost = new GameHost({ presence });
 
-// The two game engines. FlashBrowser -- the game page with FlashBrowser's PPAPI Flash plugin,
-// in a Chromium 87 window (lib/flashBrowser.js) -- is the default. Adobe's standalone Flash
-// Player (lib/projector.js) is the Legacy button, for players who see a delay collecting
-// loot in the plugin.
-const ENGINES = ['flashbrowser', 'projector'];
+// The three game engines. Ruffle -- the server's /web page, the game in the Ruffle Flash
+// emulator, in a window of the launcher's own Electron (lib/ruffleWindow.js) -- is the default:
+// it draws on the GPU and holds the game's frame rate where Flash Player drops it. Legacy --
+// Adobe's standalone Flash Player (lib/projector.js) -- is the second button. FlashBrowser --
+// the game page with FlashBrowser's PPAPI Flash plugin, in a Chromium 87 window
+// (lib/flashBrowser.js) -- is the third, where this system has one.
+const ENGINES = ['ruffle', 'projector', 'flashbrowser'];
 
 let launcherWindow = null;
 // The program running the game -- FlashBrowser or the standalone Flash Player -- and which
@@ -223,7 +228,7 @@ function projectorReady() {
     return Boolean(projector && !projector.archMismatch && !projector.tampered);
 }
 
-/** Whether the game can be started in FlashBrowser, the default engine. */
+/** Whether the game can be started in FlashBrowser, the second engine. */
 function flashBrowserReady() {
     return Boolean(flashBrowser.found && !flashBrowser.tampered);
 }
@@ -231,27 +236,25 @@ function flashBrowserReady() {
 /**
  * The engine a plain "play" uses -- the start-up play of a remembered player, and the play
  * after a sign-in: the one the player last picked with a button, as long as it can run;
- * otherwise FlashBrowser, the default; otherwise the standalone Flash Player.
+ * otherwise Ruffle, the default, which needs nothing installed beyond the launcher itself.
  */
 function preferredEngine() {
-    const saved = state.read().engine;
-    if (saved === 'projector' && projectorReady()) {
-        return 'projector';
-    }
+    const saved = state.read().chosenEngine;
     if (saved === 'flashbrowser' && flashBrowserReady()) {
         return 'flashbrowser';
     }
-    if (flashBrowserReady()) {
-        return 'flashbrowser';
-    }
-    if (projectorReady()) {
+    if (saved === 'projector' && projectorReady()) {
         return 'projector';
     }
-    return flashBrowser.offered ? 'flashbrowser' : 'projector';
+    return 'ruffle';
 }
 
 /** Why an engine cannot start the game right now, or '' when it can. */
 function engineProblem(engine) {
+    if (engine === 'ruffle') {
+        // Ruffle is the page itself, in the launcher's own window: nothing to find or check.
+        return '';
+    }
     if (engine === 'flashbrowser') {
         if (!flashBrowser.offered) {
             return 'FlashBrowser is not available on this system. Play Legacy instead.';
@@ -294,9 +297,9 @@ function findFlashPlayer() {
         }
     } else if (flashBrowser.offered) {
         const missing = flashBrowser.partial ? ` (missing ${flashBrowser.partial.missing.join(', ')})` : '';
-        console.log(`[FlashBrowser] Not found for ${flashBrowser.target}${missing}; the game runs in Flash Player.`);
+        console.log(`[FlashBrowser] Not found for ${flashBrowser.target}${missing}; Ruffle and Legacy still play.`);
     } else {
-        console.log(`[FlashBrowser] None for ${process.platform}-${process.arch}; the game runs in Flash Player.`);
+        console.log(`[FlashBrowser] None for ${process.platform}-${process.arch}; Ruffle and Legacy still play.`);
     }
 
     projector = locateProjector(state.read().projectorPath);
@@ -680,6 +683,15 @@ async function spawnGame(engine, label, { command, args, cwd, env }) {
     }
     child.on('error', (error) => console.log(`[${label}] ${(error && error.message) || error}`));
 
+    trackGame(engine, label, child);
+    return { ok: true, child };
+}
+
+/**
+ * Makes `child` the running game -- a spawned program, or the Ruffle window's stand-in for one
+ * -- and ends the game session when it exits.
+ */
+function trackGame(engine, label, child) {
     gameProcess = child;
     gameEngine = engine;
     child.once('exit', (code, signal) => {
@@ -690,7 +702,6 @@ async function spawnGame(engine, label, { command, args, cwd, env }) {
             endGameSession();
         }
     });
-    return { ok: true, child };
 }
 
 /**
@@ -737,6 +748,9 @@ async function launchProjector(serverUrl, settings) {
         return { ok: false, message: `Flash Player could not be prepared: ${(error && error.message) || error}` };
     }
     const { command, args, cwd, env } = launch;
+    // Direct (hardware) rendering by default on Windows; DB_FLASH_RENDER=software turns it off.
+    const render = flashRenderMode();
+    console.log(`[Flash] Render mode: ${render || 'software'}${process.env.DB_FLASH_RENDER ? ' (DB_FLASH_RENDER)' : ''}`);
     console.log(`[Flash] Starting ${command} ${args.join(' ')}${cwd ? ` in ${cwd}` : ''} for ${swfUrl}`);
 
     const started = await spawnGame('projector', 'Flash Player', { command, args, cwd, env });
@@ -747,6 +761,11 @@ async function launchProjector(serverUrl, settings) {
     // The window says "Dungeon Blitz: R", never Flash Player's name or the game's address.
     const title = keepGameTitle(started.child.pid);
     started.child.once('exit', () => title.stop());
+
+    // A 1 ms Windows timer, so Flash Player holds a steady 60 fps (lib/flashTimer.js).
+    boostFlashTimer(started.child.pid, {
+        onResult: (result) => console.log(`[Flash] Timer resolution: ${result}`)
+    });
 
     gameHost.start({ serverUrl, presence: Boolean(settings.startDiscordBridge) });
     startAccountPolling();
@@ -800,6 +819,33 @@ async function launchFlashBrowser(serverUrl) {
     return { ok: true };
 }
 
+/**
+ * Opens the game in Ruffle: the server's /web page in a window of the launcher's own Electron
+ * (lib/ruffleWindow.js). The page runs its own script, as in FlashBrowser, so lib/gameHost.js
+ * stays off, and its game socket goes through the server's WebSocket.
+ *
+ * @returns {{ ok: boolean, message?: string }}
+ */
+function launchRuffle(serverUrl) {
+    const opened = ruffleWindow.openRuffleWindow({
+        BrowserWindow,
+        serverUrl,
+        userDataDir: app.getPath('userData'),
+        icon: windowIcon,
+        devTools: !app.isPackaged,
+        openExternal,
+        log: (message) => console.log(`[Ruffle] ${message}`)
+    });
+    if (!opened.ok) {
+        return opened;
+    }
+    console.log(`[Ruffle] Opening ${opened.url}`);
+    trackGame('ruffle', 'Ruffle', opened.child);
+    // Whoever the game ends up signing in as is remembered for the next launch.
+    startAccountPolling();
+    return { ok: true };
+}
+
 function stopGameProcess() {
     if (gameProcess) {
         const child = gameProcess;
@@ -815,7 +861,7 @@ function stopGameProcess() {
 
 /**
  * @param {{ engine?: string, serverId?: string }} [options] `engine` is the button the player
- *   pressed ('flashbrowser' or 'projector'), and is remembered for the next plain play; without
+ *   pressed ('ruffle', 'projector' or 'flashbrowser'), and is remembered for the next plain play; without
  *   it the preferred engine runs.
  */
 async function play({ engine: requested = '', serverId = '' } = {}) {
@@ -840,7 +886,7 @@ async function play({ engine: requested = '', serverId = '' } = {}) {
         return { ok: false, message: problem };
     }
 
-    state.write(chosen ? { serverId: selected.id, engine } : { serverId: selected.id });
+    state.write(chosen ? { serverId: selected.id, chosenEngine: engine } : { serverId: selected.id });
 
     // Before Flash Player starts, not after: the server signs the game's first connection
     // in from a pending hand-off, and the point of the saved token is that there is already
@@ -898,7 +944,11 @@ async function play({ engine: requested = '', serverId = '' } = {}) {
     });
 
     const launched =
-        engine === 'flashbrowser' ? await launchFlashBrowser(selected.url) : await launchProjector(selected.url, settings);
+        engine === 'ruffle'
+            ? launchRuffle(selected.url)
+            : engine === 'flashbrowser'
+              ? await launchFlashBrowser(selected.url)
+              : await launchProjector(selected.url, settings);
     if (!launched.ok) {
         gameHost.stop();
         presence.stop();
@@ -1409,6 +1459,11 @@ function instrumentationDetected() {
 // window, embed a webview, or -- in an installed launcher -- keep developer tools open.
 app.on('web-contents-created', (_event, contents) => {
     contents.on('will-navigate', (event, url) => {
+        // The Ruffle game window may move about its own game's origin (a reload, the page's
+        // own redirects); nothing else may.
+        if (ruffleWindow.allowsNavigation(contents, url)) {
+            return;
+        }
         event.preventDefault();
         openExternal(url);
     });

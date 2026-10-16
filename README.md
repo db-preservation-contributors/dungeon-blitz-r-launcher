@@ -1,7 +1,8 @@
 # Dungeon Blitz: R Launcher
 
-A desktop launcher that plays Dungeon Blitz in FlashBrowser (the game page with the Flash
-plugin) or in Adobe's standalone Flash Player, so players do not need a browser that still
+A desktop launcher that plays Dungeon Blitz in Ruffle (the game page with the Ruffle Flash
+emulator, in the launcher's own window), in Adobe's standalone Flash Player (Legacy) or in
+FlashBrowser (the game page with the Flash plugin), so players do not need a browser that still
 has Flash. It ships for Windows, macOS and Linux.
 
 The launcher is a sign-in screen, not a control panel. It asks for one thing — sign in
@@ -54,20 +55,64 @@ comfortable with this project, please talk to us. Open an
 The Minesa Studios directly. We will listen, and we will take down or change whatever you
 ask us to without argument. We would much rather work with you than against you.
 
-## Game engines: FlashBrowser and the standalone Flash Player
+## Game engines: Ruffle, the standalone Flash Player and FlashBrowser
 
-The launcher window has two play buttons:
+The launcher window has up to three play buttons:
 
 | Button | Engine | For |
 | --- | --- | --- |
-| **Open the game** | FlashBrowser: the game page with FlashBrowser's PPAPI Flash plugin, in a Chromium 87 window | Everyone; the default |
-| **Play Legacy (Adobe Flash Player 32)** | Adobe's standalone Flash Player (`flashplayer_32_sa`) | Players who see a delay collecting loot in FlashBrowser |
+| **Open the game** | Ruffle: the server's `/web` page, the game in the Ruffle Flash emulator, in a window of the launcher's own Electron | Everyone; the default |
+| **Play Legacy (Adobe Flash Player 32)** | Legacy: Adobe's standalone Flash Player (`flashplayer_32_sa`) | Players something in Ruffle does not work for |
+| **Play in FlashBrowser** | FlashBrowser: the game page with FlashBrowser's PPAPI Flash plugin, in a Chromium 87 window | Players neither of the others works for |
 
-Both buttons are always on screen. The launcher remembers the button a player last pressed,
-and a remembered player's automatic start at launch uses it. 32-bit Windows and Linux have no
-FlashBrowser (there is no plugin for them), so there the main button plays Legacy as well.
+The launcher remembers the button a player last pressed, and a remembered player's automatic
+start at launch uses it, as long as that engine can run; otherwise it plays Ruffle. The pick
+is saved as `chosenEngine` in `launcher-state.json`. The `engine` key older launchers saved
+is dropped on purpose: it comes from launchers whose main button was FlashBrowser, so nearly
+every player has `flashbrowser` there just from pressing that button, and honouring it would
+keep them off Ruffle. 32-bit
+Windows and Linux have no FlashBrowser (there is no plugin for them), so there the FlashBrowser
+button is not shown.
 
-### FlashBrowser (default)
+### Ruffle
+
+The main button opens the selected server's `/web` page -- the game page with
+[Ruffle](https://ruffle.rs), the Flash emulator, in front of the game's SWF -- in a game
+window of the launcher's own Electron (`lib/ruffleWindow.js`).
+
+Ruffle draws the game on the GPU (WebGL or WebGPU); Adobe's Flash Player rasterises it on one
+CPU core. In the same crowded fight at the game's 125% scale, with 161 entities on screen,
+Ruffle in Chrome held 100 fps with a longest frame of about 12 ms, where Legacy held 57 fps
+with frames of about 60 ms. And Ruffle needs no plugin and nothing installed beside the
+launcher, so it plays on every system the launcher ships for.
+
+The window:
+
+- **Is locked to the game's origin.** It may reload and move about the server it opened;
+  every other navigation is refused and opened in the player's browser, as for every page
+  the launcher shows. Links the game opens in a new window (Discord's sign-in, the
+  rankings) go to the browser too.
+- **Has its own profile** (`persist:dungeon-blitz-game`), so the game's sign-in cookies are
+  not the launcher window's. It runs sandboxed, with context isolation and no Node.
+- **Keeps its pace in the background.** Background throttling is off, so the game does not
+  slow down when another window has focus.
+- **Has the usual keys.** F11 toggles full screen, F5 or Ctrl+R reloads the game, and in a
+  development checkout Ctrl+Shift+I opens the developer tools.
+- **Remembers its size and place** in `ruffle-window.json` in the launcher's user data
+  folder (the windowed size, even when closed in full screen).
+
+The page runs its own script, as in FlashBrowser: rich presence, region latency and the
+in-game Discord sign-in, so `lib/gameHost.js` stays off. Discord's sign-in finishes in the
+player's browser, so the page never sees the `localStorage` event it waits on; the launcher
+restarts the page's sign-in poll whenever the page opens a link, which picks it up. The game
+socket goes through the server's WebSocket (Ruffle's `socketProxy`), so a blocked game port
+does not matter.
+
+The window stands in for a game process: closing it ends the game session the same way
+Flash Player exiting does, and `node tools/test-ruffle-window.js` checks all of the above
+against a fake `BrowserWindow`.
+
+### FlashBrowser
 
 The PPAPI plugin is FlashBrowser's: Flash 32.0.0.363, the last build before Adobe's
 2021-01-12 kill switch. Chromium dropped PPAPI in version 88, and the launcher itself now
@@ -118,7 +163,7 @@ page, as they always did in a browser. `lib/gameHost.js` stays off.
 | --- | --- |
 | `win32-x64` | Windows x64 packages; Windows on Arm runs it under emulation |
 | `darwin-x64` | The macOS package; Apple Silicon runs it under Rosetta |
-| none | 32-bit Windows and Linux: both buttons play Legacy |
+| none | 32-bit Windows and Linux: Ruffle and Legacy only |
 
 The `FlashBrowser` workflow assembles it on Windows and macOS whenever the lock file, the
 game-window app, the plugin or the fetch script change. It then starts it exactly as the
@@ -127,12 +172,12 @@ that movie (`tools/check-flash-browser.js`). A page that merely lists "Shockwave
 proof: Chromium lists it for any plugin path, even one with no file behind it.
 
 `tools/preflight.js` fails a Windows x64 or macOS build that has no FlashBrowser, because
-its main button could never start. Set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1` to
-build one anyway; that package plays in Flash Player.
+its FlashBrowser button could never start. Set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1` to
+build one anyway; that package plays in Ruffle and Flash Player.
 
 ### The standalone Flash Player
 
-The **Legacy** button runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`,
+The second button, **Legacy**, runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`,
 the standalone player Adobe calls the projector. The launcher starts it on the game's SWF,
 straight from the selected server:
 
@@ -140,13 +185,61 @@ straight from the selected server:
 flashplayer_32_sa.exe http://<server>/p/cbp/DungeonBlitz.swf?fv=cbp&gv=cbp&clientrev=...
 ```
 
+On Windows it goes through a small loader file instead, for direct rendering (see
+[below](#direct-hardware-rendering-on-windows)); the game still comes from the same URL.
+
 Flash Player runs as its own process, with its own window and renderer. Nothing sits
 between it and the game. The standalone player also has no 2021-01-12 kill switch; the
 browser plugins do.
 
 The PPAPI plugin in FlashBrowser sits behind Chromium's plugin host, compositor and IPC.
 Some players feel that as input and frame delay, most of all when collecting loot. Flash
-Player has none of it, which is what the Legacy button is for.
+Player has none of it, which is why Legacy comes before FlashBrowser.
+
+#### A steady 60 fps on Windows
+
+Flash Player 32 paces its frames off the Windows timer and tops out at 60 fps, however high
+the game asks (it asks for 100) and however fast the display (measured on a 200 Hz screen).
+At Windows' default 15.6 ms timer tick a 16.7 ms frame keeps landing a tick late, so about
+one frame in nine takes 31-32 ms. Since Windows 10 2004 the timer resolution belongs to each
+process, so nothing outside Flash Player can lend it a finer one, and Flash Player never asks
+for one itself.
+
+So the launcher has Flash Player ask (`lib/flashTimer.js`): for each game the 32-bit
+PowerShell starts one thread in Flash Player at winmm.dll's own `timeBeginPeriod`, with the
+argument 1. Nothing is written into Flash Player's memory, the thread only runs once it has
+checked that winmm.dll sits at the same address in both processes, and the request lasts
+until Flash Player exits. The log says `[Flash] Timer resolution: ok: 1 ms`. Measured with a
+bare 60 fps movie in 32.0.0.465, per 180 frames:
+
+| Timer | Average | Frames over 20 ms | Worst frame |
+| --- | --- | --- | --- |
+| Windows default (15.6 ms) | 60 fps | 15-21 | 33 ms |
+| 1 ms (the launcher's) | 60 fps | 6-9 | 22-24 ms |
+
+`DB_FLASH_TIMER=0` on the launcher leaves Flash Player's timer alone. Linux has its own fix
+for the same tick (`native_flash/flash_short_tick.c`).
+
+What is left is the game's own frame cost: a frame whose work takes longer than 16.7 ms still
+drops below 60. With software rendering the window size decided it: in the same fight Legacy
+held 57-61 fps with the game at 84% scale, and 40-45 fps at its 125% cap in a large window.
+
+#### Direct (hardware) rendering on Windows
+
+So on Windows the launcher starts Flash Player on a loader file (`lib/loaderSwf.js`) instead
+of the game's URL. Its FileAttributes ask for hardware rendering (UseDirectBlit, the
+projector's form of wmode "direct"); the game's own SWF asks for none, and the first movie's
+flags are what Flash Player goes by. The loader then loads the game into level 0, as it
+already does on macOS. In that same fight at the 125% cap, direct rendering held 57 fps.
+Single frames of about 60 ms remain at any window size; those are the game's own work.
+
+| `DB_FLASH_RENDER` | Rendering |
+| --- | --- |
+| unset | `direct` on Windows; software on macOS and Linux, where direct is untried |
+| `direct` / `gpu` | UseDirectBlit / UseGPU, on any system |
+| `software` | Flash Player's own software rendering, started on the game's URL as before |
+
+The log says `[Flash] Render mode: direct` (or `software`).
 
 | Platform | What ships | Notes |
 | --- | --- | --- |
@@ -301,7 +394,10 @@ Hovering a value shows the detail: the local presence endpoint, or the last erro
 
 Machine and engine details are not rows. A missing, changed or unrunnable FlashBrowser or
 Flash Player, or a Windows that is too old, is said in the problem banner above the strip
-instead. A FlashBrowser problem points at the Legacy button, which still plays. `main.js`
+instead. Ruffle, the main button, needs neither, so a Flash Player or FlashBrowser problem
+only takes away its own button and says that the main button still plays; it is shown after
+anything that keeps the main button from playing (an unreachable server, a cancelled
+sign-in, a server notice, a launcher run from a disk image). `main.js`
 prints the Flash Player line on the console, and `node tools/test-launcher-status.js`
 checks every state of the strip and the banner.
 
@@ -373,7 +469,7 @@ and 8 running. Electron 11 had stopped getting security fixes, so the launcher m
 supported Electron and gave up Windows 7, 8 and 8.1, which Electron dropped in version 23.
 
 FlashBrowser still needs the Flash host, so it ships its own Electron 11 as a separate program
-(see [FlashBrowser](#flashbrowser-default)). Only the game page runs on that old Chromium, in
+(see [FlashBrowser](#flashbrowser)). Only the game page runs on that old Chromium, in
 its own process and profile; the launcher, its IPC and its sign-in never do.
 
 Discord's consent screen still opens in the player's own browser rather than inside the app,
@@ -417,10 +513,10 @@ Silicon runs both under Rosetta, and CI builds on the Intel runner. Electron nee
 ### 32-bit Windows
 
 The Windows targets build `ia32` as well as `x64`, so the releases page carries
-`-win-ia32-setup.exe` and `-win-ia32-portable.exe`. **They play**, in Flash Player only:
-`flashplayer_32_sa.exe` is itself a 32-bit program in its own process, so it runs on 32-bit
-and 64-bit Windows alike. FlashBrowser needs the x64 plugin and an x64 Electron, so the ia32
-packages carry none and both buttons play Legacy.
+`-win-ia32-setup.exe` and `-win-ia32-portable.exe`. **They play**, in Ruffle and in Flash
+Player: `flashplayer_32_sa.exe` is itself a 32-bit program in its own process, so it runs on
+32-bit and 64-bit Windows alike. FlashBrowser needs the x64 plugin and an x64 Electron, so the
+ia32 packages carry none and offer only the Ruffle and Legacy buttons.
 
 Up to 1.0.16, the 32-bit installers opened and then refused to play. The game ran in an
 x86_64 PPAPI plugin loaded *into* the launcher process, and a 32-bit process cannot load
