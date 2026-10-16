@@ -739,10 +739,9 @@ async function launchProjector(serverUrl, settings) {
         return { ok: false, message: `Flash Player could not be prepared: ${(error && error.message) || error}` };
     }
     const { command, args, cwd, env } = launch;
+    // Direct (hardware) rendering by default on Windows; DB_FLASH_RENDER=software turns it off.
     const render = flashRenderMode();
-    if (render) {
-        console.log(`[Flash] Render mode: ${render} (DB_FLASH_RENDER), through a loader file`);
-    }
+    console.log(`[Flash] Render mode: ${render || 'software'}${process.env.DB_FLASH_RENDER ? ' (DB_FLASH_RENDER)' : ''}`);
     console.log(`[Flash] Starting ${command} ${args.join(' ')}${cwd ? ` in ${cwd}` : ''} for ${swfUrl}`);
 
     const started = await spawnGame('projector', 'Flash Player', { command, args, cwd, env });

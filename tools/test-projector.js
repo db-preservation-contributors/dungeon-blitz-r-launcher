@@ -143,19 +143,27 @@ function testFindProjector() {
         }
         assert.strictEqual(projector.isChosenProjector(path.join(root, 'pepflashplayer64.dll')), false, 'a plugin is not a projector');
 
-        const launch = projector.prepareLaunch(found, 'http://a.example/p/cbp/DungeonBlitz.swf', { platform: 'win32', workDir: root });
-        assert.deepStrictEqual(launch.args, ['http://a.example/p/cbp/DungeonBlitz.swf'], 'the movie is the one argument');
+        const launch = projector.prepareLaunch(found, 'http://a.example/p/cbp/DungeonBlitz.swf', {
+            platform: 'win32',
+            workDir: root,
+            env: { DB_FLASH_RENDER: 'software' }
+        });
+        assert.deepStrictEqual(launch.args, ['http://a.example/p/cbp/DungeonBlitz.swf'], 'software rendering: the movie is the one argument');
         assert.ok(launch.command, 'there is something to execute');
 
-        // DB_FLASH_RENDER: Windows starts on a loader whose flags ask for hardware rendering.
-        assert.strictEqual(projector.flashRenderMode({}), '');
-        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: ' Direct ' }), 'direct');
-        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'gpu' }), 'gpu');
-        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'vulkan' }), '', 'an unknown mode is ignored');
+        // Windows renders direct by default, through a loader whose flags ask for it;
+        // DB_FLASH_RENDER picks another mode, and other systems keep software rendering.
+        assert.strictEqual(projector.flashRenderMode({}, 'win32'), 'direct', 'direct by default on Windows');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'software' }, 'win32'), '', 'software turns it off');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: ' GPU ' }, 'win32'), 'gpu');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'vulkan' }, 'win32'), 'direct', 'an unknown mode keeps the default');
+        assert.strictEqual(projector.flashRenderMode({}, 'darwin'), '', 'macOS keeps software rendering');
+        assert.strictEqual(projector.flashRenderMode({}, 'linux'), '');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'direct' }, 'darwin'), 'direct', 'unless asked');
         const direct = projector.prepareLaunch(found, 'http://a.example/p/cbp/DungeonBlitz.swf', {
             platform: 'win32',
             workDir: root,
-            env: { DB_FLASH_RENDER: 'direct' }
+            env: {}
         });
         const loaderPath = path.join(root, projector.WINDOWS_LOADER_FILE);
         assert.deepStrictEqual(direct.args, [loaderPath], 'started on the loader file');

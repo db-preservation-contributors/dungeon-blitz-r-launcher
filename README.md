@@ -143,6 +143,9 @@ straight from the selected server:
 flashplayer_32_sa.exe http://<server>/p/cbp/DungeonBlitz.swf?fv=cbp&gv=cbp&clientrev=...
 ```
 
+On Windows it goes through a small loader file instead, for direct rendering (see
+[below](#direct-hardware-rendering-on-windows)); the game still comes from the same URL.
+
 Flash Player runs as its own process, with its own window and renderer. Nothing sits
 between it and the game. The standalone player also has no 2021-01-12 kill switch; the
 browser plugins do.
@@ -172,16 +175,29 @@ bare 60 fps movie in 32.0.0.465, per 180 frames:
 | Windows default (15.6 ms) | 60 fps | 15-21 | 33 ms |
 | 1 ms (the launcher's) | 60 fps | 6-9 | 22-24 ms |
 
-What is left is the game's own frame cost: a frame whose work takes longer than 16.7 ms still
-drops below 60. In game the window size decides it: in the same fight Legacy held 57-61 fps
-with the game at 84% scale, and 40-45 fps at its 125% cap in a large window.
+`DB_FLASH_TIMER=0` on the launcher leaves Flash Player's timer alone. Linux has its own fix
+for the same tick (`native_flash/flash_short_tick.c`).
 
-`DB_FLASH_RENDER=direct` (or `gpu`) is a test switch for that: Windows then starts Flash Player
-on a loader file (lib/loaderSwf.js) whose FileAttributes ask for hardware rendering
-(UseDirectBlit or UseGPU). The game's own SWF asks for neither, and the first movie's flags
-are what Flash Player goes by. The loader then loads the game into level 0, as it does on
-macOS. The log says `[Flash] Render mode: direct`. `DB_FLASH_TIMER=0` on the launcher leaves Flash Player's timer alone. Linux
-has its own fix for the same tick (`native_flash/flash_short_tick.c`).
+What is left is the game's own frame cost: a frame whose work takes longer than 16.7 ms still
+drops below 60. With software rendering the window size decided it: in the same fight Legacy
+held 57-61 fps with the game at 84% scale, and 40-45 fps at its 125% cap in a large window.
+
+#### Direct (hardware) rendering on Windows
+
+So on Windows the launcher starts Flash Player on a loader file (`lib/loaderSwf.js`) instead
+of the game's URL. Its FileAttributes ask for hardware rendering (UseDirectBlit, the
+projector's form of wmode "direct"); the game's own SWF asks for none, and the first movie's
+flags are what Flash Player goes by. The loader then loads the game into level 0, as it
+already does on macOS. In that same fight at the 125% cap, direct rendering held 57 fps.
+Single frames of about 60 ms remain at any window size; those are the game's own work.
+
+| `DB_FLASH_RENDER` | Rendering |
+| --- | --- |
+| unset | `direct` on Windows; software on macOS and Linux, where direct is untried |
+| `direct` / `gpu` | UseDirectBlit / UseGPU, on any system |
+| `software` | Flash Player's own software rendering, started on the game's URL as before |
+
+The log says `[Flash] Render mode: direct` (or `software`).
 
 | Platform | What ships | Notes |
 | --- | --- | --- |
