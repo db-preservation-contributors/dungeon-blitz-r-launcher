@@ -1,9 +1,8 @@
 # Dungeon Blitz: R Launcher
 
-A desktop launcher that plays Dungeon Blitz in Ruffle (the game page with the Ruffle Flash
-emulator, in the launcher's own window), in Adobe's standalone Flash Player (Legacy) or in
-FlashBrowser (the game page with the Flash plugin), so players do not need a browser that still
-has Flash. It ships for Windows, macOS and Linux.
+A desktop launcher that plays Dungeon Blitz in Legacy -- Adobe Flash Player 32, the standalone
+player, which ships inside the launcher -- so players do not need a browser that still has
+Flash. It ships for Windows, macOS and Linux.
 
 The launcher is a sign-in screen, not a control panel. It asks for one thing — sign in
 with Discord — and once that is done it opens the game and connects to the server. A player who has signed in before is not asked again.
@@ -55,130 +54,20 @@ comfortable with this project, please talk to us. Open an
 The Minesa Studios directly. We will listen, and we will take down or change whatever you
 ask us to without argument. We would much rather work with you than against you.
 
-## Game engines: Ruffle, the standalone Flash Player and FlashBrowser
+## The game engine: Legacy, the standalone Flash Player
 
-The launcher window has up to three play buttons:
+The launcher window has one play button, **Open the game**. It runs the game in Legacy:
+Adobe's standalone Flash Player 32 (`flashplayer_32_sa`, `lib/projector.js`). A remembered
+player's automatic start at launch, and the play that follows a sign-in, start it the same way.
 
-| Button | Engine | For |
-| --- | --- | --- |
-| **Open the game** | Ruffle: the server's `/web` page, the game in the Ruffle Flash emulator, in a window of the launcher's own Electron | Everyone; the default |
-| **Play Legacy (Adobe Flash Player 32)** | Legacy: Adobe's standalone Flash Player (`flashplayer_32_sa`) | Players something in Ruffle does not work for |
-| **Play in FlashBrowser** | FlashBrowser: the game page with FlashBrowser's PPAPI Flash plugin, in a Chromium 87 window | Players neither of the others works for |
-
-The launcher remembers the button a player last pressed, and a remembered player's automatic
-start at launch uses it, as long as that engine can run; otherwise it plays Ruffle. The pick
-is saved as `chosenEngine` in `launcher-state.json`. The `engine` key older launchers saved
-is dropped on purpose: it comes from launchers whose main button was FlashBrowser, so nearly
-every player has `flashbrowser` there just from pressing that button, and honouring it would
-keep them off Ruffle. 32-bit
-Windows and Linux have no FlashBrowser (there is no plugin for them), so there the FlashBrowser
-button is not shown.
-
-### Ruffle
-
-The main button opens the selected server's `/web` page -- the game page with
-[Ruffle](https://ruffle.rs), the Flash emulator, in front of the game's SWF -- in a game
-window of the launcher's own Electron (`lib/ruffleWindow.js`).
-
-Ruffle draws the game on the GPU (WebGL or WebGPU); Adobe's Flash Player rasterises it on one
-CPU core. In the same crowded fight at the game's 125% scale, with 161 entities on screen,
-Ruffle in Chrome held 100 fps with a longest frame of about 12 ms, where Legacy held 57 fps
-with frames of about 60 ms. And Ruffle needs no plugin and nothing installed beside the
-launcher, so it plays on every system the launcher ships for.
-
-The window:
-
-- **Is locked to the game's origin.** It may reload and move about the server it opened;
-  every other navigation is refused and opened in the player's browser, as for every page
-  the launcher shows. Links the game opens in a new window (Discord's sign-in, the
-  rankings) go to the browser too.
-- **Has its own profile** (`persist:dungeon-blitz-game`), so the game's sign-in cookies are
-  not the launcher window's. It runs sandboxed, with context isolation and no Node.
-- **Keeps its pace in the background.** Background throttling is off, so the game does not
-  slow down when another window has focus.
-- **Has the usual keys.** F11 toggles full screen, F5 or Ctrl+R reloads the game, and in a
-  development checkout Ctrl+Shift+I opens the developer tools.
-- **Remembers its size and place** in `ruffle-window.json` in the launcher's user data
-  folder (the windowed size, even when closed in full screen).
-
-The page runs its own script, as in FlashBrowser: rich presence, region latency and the
-in-game Discord sign-in, so `lib/gameHost.js` stays off. Discord's sign-in finishes in the
-player's browser, so the page never sees the `localStorage` event it waits on; the launcher
-restarts the page's sign-in poll whenever the page opens a link, which picks it up. The game
-socket goes through the server's WebSocket (Ruffle's `socketProxy`), so a blocked game port
-does not matter.
-
-The window stands in for a game process: closing it ends the game session the same way
-Flash Player exiting does, and `node tools/test-ruffle-window.js` checks all of the above
-against a fake `BrowserWindow`.
-
-### FlashBrowser
-
-The PPAPI plugin is FlashBrowser's: Flash 32.0.0.363, the last build before Adobe's
-2021-01-12 kill switch. Chromium dropped PPAPI in version 88, and the launcher itself now
-runs on Electron 41, so the plugin cannot be loaded into the launcher's own window the way it
-was up to 1.0.16. FlashBrowser is therefore a separate program the launcher starts for each
-game, just as it starts Flash Player:
-
-```text
-vendor/flashbrowser/<target>/runtime/   Electron 11.5.0 (Chromium 87), exactly as Electron publishes it
-vendor/flashbrowser/<target>/app/       the game-window app, from flashbrowser/
-vendor/flashbrowser/<target>/plugin/    pepflashplayer64.dll | PepperFlashPlayer.plugin, from payload/flash/
-```
-
-```bash
-npm run fetch-flash-browser                                       # this machine
-node tools/fetch-flash-browser.js --platform darwin --arch x64    # another target
-```
-
-`tools/fetch-flash-browser.js` downloads Electron 11 from Electron's releases and checks it
-against the SHA-256 pinned in `flashbrowser.lock.json`. It copies the plugin out of
-`payload/flash/<platform>/` (Git LFS; run `git lfs pull` first) and checks every file of it
-against the lock as well. The game-window app (`flashbrowser/main.js`) runs on Electron 11's
-Node 12. It:
-
-- opens the selected server's game page with the plugin, titled `Dungeon Blitz: R`;
-- keeps the window on the game's origin and sends every other link to the system browser;
-- keeps its own profile (`<user data>/flashbrowser`), never the launcher's;
-- restarts the page's Discord sign-in poll when the in-game sign-in opens the browser;
-- lets the game run at its own 100 fps (`stage.frameRate = 100`): Chromium otherwise paces
-  the plugin to the display, usually 60. `DB_VSYNC=1` on the launcher keeps Chromium's pacing,
-  for a display that tears without it;
-- ignores the system proxy, which VPN programs often set and which then received the game's
-  socket and page instead of the server. `DB_SYSTEM_PROXY=1` uses it again.
-
-When the game port does not answer from the player's network (a firewall or provider that
-only lets web traffic out), the launcher tunnels the game socket through the server's
-WebSocket (`wss://<host>/game-ws`, the web client's socket) before it opens the window
-(`lib/gameTunnel.js`). The server names both on `GET /api/launcher/game-socket`. The launcher
-listens on 127.0.0.1 on the game port, 80 and 443, the window resolves the game host to
-127.0.0.1 (`--db-host-rules`), and only the game port's bytes change route: the page and its
-files are piped to the real server unchanged. A server without the route or without a
-WebSocket, a reachable game port, or a port that cannot be opened here all play direct.
-
-The game page runs its own script there, so rich presence and region latency come from the
-page, as they always did in a browser. `lib/gameHost.js` stays off.
-
-| Target | Ships |
-| --- | --- |
-| `win32-x64` | Windows x64 packages; Windows on Arm runs it under emulation |
-| `darwin-x64` | The macOS package; Apple Silicon runs it under Rosetta |
-| none | 32-bit Windows and Linux: Ruffle and Legacy only |
-
-The `FlashBrowser` workflow assembles it on Windows and macOS whenever the lock file, the
-game-window app, the plugin or the fetch script change. It then starts it exactly as the
-launcher does on a test page that embeds a SWF, and fails unless Flash is actually running
-that movie (`tools/check-flash-browser.js`). A page that merely lists "Shockwave Flash" is no
-proof: Chromium lists it for any plugin path, even one with no file behind it.
-
-`tools/preflight.js` fails a Windows x64 or macOS build that has no FlashBrowser, because
-its FlashBrowser button could never start. Set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1` to
-build one anyway; that package plays in Ruffle and Flash Player.
+Older launchers offered other engines and saved the one a player last picked as
+`chosenEngine` (and before that `engine`) in `launcher-state.json`. Neither key is read any
+more: every play starts Flash Player, and the next write leaves both out of the file.
 
 ### The standalone Flash Player
 
-The second button, **Legacy**, runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`,
-the standalone player Adobe calls the projector. The launcher starts it on the game's SWF,
+The play button runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`, the
+standalone player Adobe calls the projector. The launcher starts it on the game's SWF,
 straight from the selected server:
 
 ```
@@ -191,10 +80,6 @@ On Windows it goes through a small loader file instead, for direct rendering (se
 Flash Player runs as its own process, with its own window and renderer. Nothing sits
 between it and the game. The standalone player also has no 2021-01-12 kill switch; the
 browser plugins do.
-
-The PPAPI plugin in FlashBrowser sits behind Chromium's plugin host, compositor and IPC.
-Some players feel that as input and frame delay, most of all when collecting loot. Flash
-Player has none of it, which is why Legacy comes before FlashBrowser.
 
 #### A steady 60 fps on Windows
 
@@ -329,8 +214,7 @@ node tools/test-flash-preload.js
 
 #### The window title
 
-FlashBrowser's window is the launcher's own app, so it simply keeps that title. In Flash
-Player the game window always reads **Dungeon Blitz: R**, never the game's address. Flash Player
+The game window always reads **Dungeon Blitz: R**, never the game's address. Flash Player
 names its own window, so how that is achieved differs by platform:
 
 | Platform | Flash Player's own title | What the launcher does |
@@ -365,8 +249,8 @@ Sign-in needs nothing from the page:
 
 ### A build without Flash Player
 
-A **packaged** launcher always ships its own Flash Player. One that can run neither Flash
-Player nor FlashBrowser refuses to start: it shows an error box naming the path it is running from and quits, rather than
+A **packaged** launcher always ships its own Flash Player. One that cannot run it refuses to
+start: it shows an error box naming the path it is running from and quits, rather than
 leaving a player on a sign-in screen that leads nowhere. Set
 `DUNGEON_BLITZ_ALLOW_NO_FLASH=1` for a deliberately Flash-less build.
 
@@ -392,14 +276,13 @@ The sign-in screen carries a status strip with four rows, the ones a player care
 
 Hovering a value shows the detail: the local presence endpoint, or the last error.
 
-Machine and engine details are not rows. A missing, changed or unrunnable FlashBrowser or
-Flash Player, or a Windows that is too old, is said in the problem banner above the strip
-instead. Ruffle, the main button, needs neither, so a Flash Player or FlashBrowser problem
-only takes away its own button and says that the main button still plays; it is shown after
-anything that keeps the main button from playing (an unreachable server, a cancelled
-sign-in, a server notice, a launcher run from a disk image). `main.js`
-prints the Flash Player line on the console, and `node tools/test-launcher-status.js`
-checks every state of the strip and the banner.
+Machine and engine details are not rows. A missing, changed or unrunnable Flash Player, or a
+Windows that is too old, is said in the problem banner above the strip instead. Flash Player
+is the only engine, so one that cannot run also turns the play button off. Its problem is
+shown after a cancelled sign-in and the answer to a hand-picked Flash Player, and before an
+unreachable server or a launcher run from a disk image. `main.js` prints the Flash Player
+line on the console, and `node tools/test-launcher-status.js` checks every state of the
+strip, the banner and the play button.
 
 Once an account is known, the sign-in button is replaced by `Signed in as <name>`. That holds
 whether the sign-in happened in the launcher or inside the game, where the SWF's own Discord
@@ -410,8 +293,7 @@ flow lands the player (see [Remembered account](#remembered-account)).
 An **installed** launcher refuses to be repurposed. A development checkout is exempt from
 all of this.
 
-- **Only its own Flash Player and FlashBrowser.** It runs only the engines it was installed
-  with. It never uses a hand-picked file or a copy found elsewhere on the machine, so the
+- **Only its own Flash Player.** It runs only the Flash Player it was installed with. It never uses a hand-picked file or a copy found elsewhere on the machine, so the
   **Choose Flash Player...** button is hidden.
 - **Fingerprint check before every game.** At build time, `tools/fetch-projector.js`
   records a SHA-256 fingerprint of that Flash Player in `lib/projector.integrity.json`. That
@@ -419,11 +301,6 @@ all of this.
   - The check covers every file in the macOS bundle, so an added library counts as a change.
   - A replaced or patched player is refused: the status strip reads
     `changed - reinstall`, and the game does not start.
-  - FlashBrowser is fingerprinted the same way, as one tree: the Electron 11 runtime, the
-    game-window app and the plugin, recorded by `tools/fetch-flash-browser.js` in
-    `lib/flashbrowser.integrity.json`. A changed or added file anywhere in it is refused.
-  - FlashBrowser is started without the launcher's `ELECTRON_*` and `NODE_OPTIONS`
-    variables, and with developer tools off.
 - **No developer tools.** The launcher window has DevTools switched off, and any DevTools
   that open are closed again.
 - **Electron fuses.** The build sets Electron's fuses (`build.electronFuses` in
@@ -442,9 +319,9 @@ all of this.
   switches no fuse controls.
 - **The window stays on its own page.** No page can navigate the launcher window
   elsewhere, open a new window or embed a webview. Links go to the system browser.
-- **CI checks the shipped copy.** The release workflow runs `tools/verify-projector.js` and
-  `tools/verify-flash-browser.js` on the copies inside each finished package. A package whose own check would
-  refuse to play therefore cannot be published.
+- **CI checks the shipped copy.** The release workflow runs `tools/verify-projector.js` on
+  the copy inside each finished package. A package whose own check would refuse to play
+  therefore cannot be published.
 
 **What this cannot stop.** Nothing running on the player's own machine can be made
 impossible to manipulate; these checks raise the cost of doing it. In particular:
@@ -456,8 +333,7 @@ impossible to manipulate; these checks raise the cost of doing it. In particular
 - **Unsigned installers.** Installers are unsigned unless the studio's certificates are
   configured (`CSC_LINK`, `CSC_KEY_PASSWORD`, and Apple notarization). Signing is what makes
   a modified installer show as untrusted to the player.
-- **The game itself.** Flash Player or the plugin runs the SWF, and memory editors work on
-  any process.
+- **The game itself.** Flash Player runs the SWF, and memory editors work on any process.
   What the game accepts is decided by the server: `src/server/core/anticheat` in the game
   repository.
 
@@ -467,10 +343,6 @@ The launcher window runs on Electron 41. It used to be pinned to Electron 11 (Ch
 first because Chromium 87 was the last with the PPAPI Flash host, and later to keep Windows 7
 and 8 running. Electron 11 had stopped getting security fixes, so the launcher moved to a
 supported Electron and gave up Windows 7, 8 and 8.1, which Electron dropped in version 23.
-
-FlashBrowser still needs the Flash host, so it ships its own Electron 11 as a separate program
-(see [FlashBrowser](#flashbrowser)). Only the game page runs on that old Chromium, in
-its own process and profile; the launcher, its IPC and its sign-in never do.
 
 Discord's consent screen still opens in the player's own browser rather than inside the app,
 because the launcher window loads no remote content. The launcher still sees the result:
@@ -495,12 +367,11 @@ because the launcher window loads no remote content. The launcher still sees the
 
 | Folder | What | In git |
 | --- | --- | --- |
-| `payload/` | The prebuilt Discord Social SDK bridges, and FlashBrowser's Flash plugin | Yes, via Git LFS |
+| `payload/` | The prebuilt Discord Social SDK bridges | Yes, via Git LFS |
 | `vendor/` | Build output — what packaging reads | No, gitignored |
 
 ```text
 vendor/projector/<platform>/  flashplayer_32_sa.exe | Flash Player.app | flashplayer   (tools/fetch-projector.js)
-vendor/flashbrowser/<target>/ runtime/ (Electron 11) + app/ + plugin/                   (tools/fetch-flash-browser.js)
 vendor/social/<platform>/     discord_social_bridge[.exe] + the SDK runtime library   (tools/stage-vendor.js)
 ```
 
@@ -513,10 +384,9 @@ Silicon runs both under Rosetta, and CI builds on the Intel runner. Electron nee
 ### 32-bit Windows
 
 The Windows targets build `ia32` as well as `x64`, so the releases page carries
-`-win-ia32-setup.exe` and `-win-ia32-portable.exe`. **They play**, in Ruffle and in Flash
-Player: `flashplayer_32_sa.exe` is itself a 32-bit program in its own process, so it runs on
-32-bit and 64-bit Windows alike. FlashBrowser needs the x64 plugin and an x64 Electron, so the
-ia32 packages carry none and offer only the Ruffle and Legacy buttons.
+`-win-ia32-setup.exe` and `-win-ia32-portable.exe`. **They play**: `flashplayer_32_sa.exe`
+is itself a 32-bit program in its own process, so it runs on 32-bit and 64-bit Windows
+alike.
 
 Up to 1.0.16, the 32-bit installers opened and then refused to play. The game ran in an
 x86_64 PPAPI plugin loaded *into* the launcher process, and a 32-bit process cannot load
@@ -689,8 +559,7 @@ The meter is DB DPS Launcher's ([db-dpsmod](https://github.com/killssingkurisu/d
 `lib/damageMeter` carries its packet reading, meter and export files unchanged, so a fix there
 can be copied across whole, and the window's page is its in-game overlay on a page of its own.
 
-The launcher never sees the game's traffic -- FlashBrowser and Flash Player talk to the
-server themselves -- so, as with chat, the game server publishes what the meter needs on a
+The launcher never sees the game's traffic -- Flash Player talks to the server itself -- so, as with chat, the game server publishes what the meter needs on a
 feed and the launcher reads it: about twice a second, and only while the meter's window is
 open during a game session, so a player who never opens it costs the server nothing. Nothing
 on the player's machine is read, patched or redirected:
@@ -871,7 +740,7 @@ is where a shared setup belongs, since it is not part of this repository.
 ## Running and packaging
 
 ```bash
-npm install && npm run fetch-projector && npm run fetch-flash-browser && npm start
+npm install && npm run fetch-projector && npm start
 ```
 
 ```bash
@@ -879,10 +748,8 @@ npm run dist:win
 ```
 
 Each `dist:` script first fetches Flash Player for its platform
-(`tools/fetch-projector.js`) and assembles FlashBrowser where the target has one
-(`tools/fetch-flash-browser.js`; run `git lfs pull` first for the plugin). It then runs
-`tools/preflight.js`, which fails the build when that platform has no Flash Player in
-`vendor/projector/`, or a Windows x64 or macOS target has no FlashBrowser. For a deliberately Flash-less
+(`tools/fetch-projector.js`). It then runs `tools/preflight.js`, which fails the build when
+that platform has no Flash Player in `vendor/projector/`. For a deliberately Flash-less
 package, set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASH=1`.
 
 The application icon comes from one source image, `build/icon.png` (1024×1024 with alpha).
@@ -918,9 +785,9 @@ npm run dist:win -- --dir --config.win.signAndEditExecutable=false
 
 Bumping `version` in `package.json` on `main` is what cuts a release.
 `.github/workflows/release.yml` then builds on three native runners, stages the binaries,
-downloads Flash Player (checked against `projector.lock.json`), assembles FlashBrowser
-(checked against `flashbrowser.lock.json`), runs the preflight (a missing engine fails the
-job), runs electron-builder, checks that both made it into the package intact, and attaches the installers to a draft GitHub release tagged
+downloads Flash Player (checked against `projector.lock.json`), runs the preflight (a
+missing Flash Player fails the job), runs electron-builder, checks that Flash Player made it
+into the package intact, and attaches the installers to a draft GitHub release tagged
 `v<version>`:
 
 | Platform | Files |
@@ -1027,20 +894,18 @@ drives the module against a local mock.
 | `tools/test-chat-relay.js` | Own-chat mirroring once, queueing while the lobby is down, inbound printing, unsupported servers |
 | `tools/test-social-bridge.js` | Discord-client and browser authorization paths, lobby join, two-way chat |
 | `tools/test-discord-ipc.js` | The RPC framing, `AUTHORIZE` payload and PING/PONG |
-| `tools/test-launcher-status.js` | Every state of the status strip and the account row |
+| `tools/test-launcher-status.js` | Every state of the status strip, the account row and the play button |
 | `tools/test-damage-meter.js` | The combat feed against a mock server: no feed, no session, the backlog, playback at the pace of play, a new level, game data fetched from the game server only, exports and settings |
 | `tools/test-install-location.js` | Disk-image and Downloads detection, and what is deliberately not flagged |
 | `tools/test-windows-support.js` | Which Windows versions and architectures start, and how the others are refused |
-| `tools/test-projector.js` | Finding Flash Player, the SWF it opens, the pinned downloads, and the presence and region-latency work done for the game page |
-| `tools/test-flash-browser.js` | Which machines get FlashBrowser, finding it, how it is started, its fingerprint, and that the lock, the plugin payload and packaging agree |
+| `tools/test-projector.js` | Finding Flash Player, the SWF it opens, the pinned downloads, its fingerprint, and the presence and region-latency work done for the game page |
+| `tools/test-legacy-engine.js` | `main.js` itself, with Electron stubbed: every play starts the standalone Flash Player whatever engine an older launcher saved, a missing Flash Player stops the play, and the launcher state names no other engine |
 | `tools/test-discord-login-key.js` | The Discord sign-in's one-time key: only its hash in the browser URL, the key in a header, and a login finished at another address still reaching the launcher |
 
 `.github/workflows/tests.yml` runs them on every push and pull request, so a broken Flash
 guard, presence mapping or chat relay fails before an installer is built.
 `.github/workflows/flash-player.yml` downloads and unpacks Flash Player on all three
-platforms whenever the lock file or the fetch script changes, and
-`.github/workflows/flash-browser.yml` assembles FlashBrowser on Windows and macOS and checks
-that Flash really runs a movie in it.
+platforms whenever the lock file or the fetch script changes.
 
 ## Optional: the game repository
 
@@ -1052,9 +917,7 @@ overrides that. Without it the launcher uses its own `social.config.json` and
 
 ## Game window shortcuts
 
-In FlashBrowser, `F11` toggles full screen and `F5` (or `Ctrl+R`) reloads the game page.
-
-In Flash Player the window is Flash Player's own, so its shortcuts are Flash Player's:
+The game window is Flash Player's own, so its shortcuts are Flash Player's:
 `Ctrl+F` (`Cmd+F` on macOS) toggles full screen, `Esc` leaves it, and `Ctrl+Q` (`Cmd+Q`)
 closes the game.
 
@@ -1069,11 +932,6 @@ closes the game.
   sends back. The main process takes commands from that window only. The meter reads the
   combat feed of the player's own game session and the game's data files from the game
   server, and nothing else; it does not touch the game, its files or its traffic.
-- No window of the launcher hosts Flash. The game runs in FlashBrowser or in Adobe's
-  standalone Flash Player, each a separate program started on the selected server only. The
-  Electron 11 runtime and the plugin are pinned in `flashbrowser.lock.json`, Flash Player in
-  `projector.lock.json`.
-- FlashBrowser's window runs with `contextIsolation: true`, `nodeIntegration: false`, no
-  webviews and no navigation off the game's origin. It runs on Chromium 87, which gets no
-  security fixes, so it only ever loads the game server's page.
+- No window of the launcher hosts Flash. The game runs in Adobe's standalone Flash Player, a
+  separate program started on the selected server only, pinned in `projector.lock.json`.
 - URLs are limited to `http`/`https`, and any carrying credentials are rejected.

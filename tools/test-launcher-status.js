@@ -63,7 +63,8 @@ function loadRenderer() {
     };
 
     let render = null;
-    // Which engine each press of a play button asked for.
+    // The calls the window made: each play, with whatever it passed (nothing, now that there is
+    // one engine), and the other buttons' calls by name.
     const plays = [];
     const window = {
         launcher: {
@@ -72,8 +73,8 @@ function loadRenderer() {
             },
             // The test drives render() itself, so the initial fetch never settles.
             getState: () => new Promise(() => {}),
-            play: async (engine) => {
-                plays.push(engine);
+            play: async (...args) => {
+                plays.push(args.length ? `play(${args.join(', ')})` : 'play');
                 return { ok: true };
             },
             discordLogin: async () => ({ ok: true }),
@@ -102,6 +103,8 @@ function loadRenderer() {
     vm.runInNewContext(source, { document, window, console });
 
     assert.ok(render, 'renderer.js must register a state handler');
+    // The suite swaps a call out now and then to see how the window answers.
+    registry.launcher = window.launcher;
     return { render, registry, plays };
 }
 
@@ -126,9 +129,7 @@ function baseState(flash, social, extra = {}) {
         selectedServerUrl: 'http://example.test/',
         serverReachable: true,
         gameRunning: false,
-        gameEngine: extra.gameEngine || '',
         flash,
-        flashBrowser: extra.flashBrowser,
         social,
         presence: extra.presence || {
             running: false,
@@ -190,8 +191,6 @@ const MISSING_FLASH = {
     archMismatch: false
 };
 
-const READY_BROWSER = { offered: true, found: true, ready: true, locked: true, tampered: false, missing: [] };
-
 const IDLE_SOCIAL = {
     enabled: true,
     running: false,
@@ -228,102 +227,94 @@ async function checkDamageMeterButton(render, registry, plays) {
 }
 
 /**
- * The play buttons: Ruffle is the main one, Legacy (Flash Player) always next to it, and
- * FlashBrowser where there is one.
+ * The play button: there is one, and it plays Legacy, the standalone Flash Player. With no
+ * other engine to fall back to, a Flash Player that cannot run takes the button away.
  */
-async function checkPlayButtons(render, registry, plays) {
+async function checkPlayButton(render, registry, plays) {
     const press = async (id) => {
         await registry.get(id).listeners.click();
-        // playWith() awaits the play() call; let it settle.
+        // play() awaits the launcher's play call; let it settle.
         await new Promise((resolve) => setImmediate(resolve));
     };
 
-    // Windows x64 and macOS: Ruffle is the main button, then Legacy and FlashBrowser.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { flashBrowser: READY_BROWSER }));
-    assert.strictEqual(registry.get('play').disabled, false, 'Ruffle can be started');
-    assert.strictEqual(registry.get('alt-engine').hidden, false, 'the other engines are offered next to it');
-    assert.strictEqual(registry.get('play-projector').disabled, false);
-    assert.strictEqual(registry.get('play-flashbrowser').hidden, false);
-    assert.strictEqual(registry.get('play-flashbrowser').disabled, false);
-    assert.strictEqual(registry.get('problem').hidden, true);
-    plays.length = 0;
-    await press('play');
-    await press('play-projector');
-    await press('play-flashbrowser');
-    assert.deepStrictEqual(plays, ['ruffle', 'projector', 'flashbrowser'], 'each button starts its own engine');
-
-    // 32-bit Windows and Linux have no FlashBrowser: Ruffle and Legacy only.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { flashBrowser: { offered: false, found: false, ready: false, missing: [] } }));
-    assert.strictEqual(registry.get('alt-engine').hidden, false, 'Legacy is still offered');
-    assert.strictEqual(registry.get('play-flashbrowser').hidden, true, 'no FlashBrowser button without a FlashBrowser');
-    assert.strictEqual(registry.get('play').disabled, false);
-    plays.length = 0;
-    await press('play');
-    assert.deepStrictEqual(plays, ['ruffle'], 'the main button plays in Ruffle');
-
-    // A state from an older main process (no flashBrowser at all) still plays.
+    // One button, no other engine offered next to it.
     render(baseState(ARMED_FLASH, IDLE_SOCIAL));
-    assert.strictEqual(registry.get('play-flashbrowser').hidden, true);
+    assert.strictEqual(registry.get('play').disabled, false, 'Legacy can be started');
+    assert.strictEqual(registry.get('problem').hidden, true);
+    for (const gone of ['alt-engine', 'play-projector', 'play-flashbrowser']) {
+        assert.ok(!registry.has(gone), `renderer.js no longer looks up #${gone}`);
+    }
+    plays.length = 0;
+    await press('play');
+    assert.deepStrictEqual(plays, ['play'], 'the button asks for a plain play, naming no engine');
+
+    // A state that still carries an engine from an older main process changes nothing.
+    render({
+        ...baseState(ARMED_FLASH, IDLE_SOCIAL),
+        engine: 'ruffle',
+        gameEngine: 'flashbrowser',
+        flashBrowser: { offered: true, found: true, ready: true, locked: true, tampered: false, missing: [] }
+    });
     assert.strictEqual(registry.get('play').disabled, false);
-    assert.strictEqual(registry.get('play-projector').disabled, false);
+    assert.strictEqual(registry.get('problem').hidden, true, 'nothing is said about another engine');
+    plays.length = 0;
+    await press('play');
+    assert.deepStrictEqual(plays, ['play']);
 
     // No server to play on: nothing can be started.
-    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { flashBrowser: READY_BROWSER }), servers: [] });
-    assert.strictEqual(registry.get('play').disabled, true, 'no server, no Ruffle');
-    assert.strictEqual(registry.get('play-projector').disabled, true);
-    assert.strictEqual(registry.get('play-flashbrowser').disabled, true);
+    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL), servers: [] });
+    assert.strictEqual(registry.get('play').disabled, true, 'no server, no game');
 
-    // An install whose FlashBrowser is gone: said in the banner, and the rest still play.
-    render(
-        baseState(ARMED_FLASH, IDLE_SOCIAL, {
-            flashBrowser: { offered: true, found: false, ready: false, locked: true, tampered: false, missing: [] }
-        })
-    );
-    assert.strictEqual(registry.get('play-flashbrowser').disabled, true, 'a missing FlashBrowser cannot be started');
-    assert.strictEqual(registry.get('play').disabled, false, 'Ruffle still can');
-    assert.strictEqual(registry.get('play-projector').disabled, false, 'and so can Legacy');
-    assert.ok(registry.get('problem').textContent.includes('FlashBrowser is missing'), registry.get('problem').textContent);
-    assert.ok(registry.get('problem').textContent.includes('main button still plays'), 'the banner points at the main button');
-
-    // A FlashBrowser changed after installation is refused, the same as a changed Flash Player.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { flashBrowser: { ...READY_BROWSER, ready: false, tampered: true } }));
-    assert.strictEqual(registry.get('play-flashbrowser').disabled, true);
-    assert.strictEqual(registry.get('play').disabled, false);
-    assert.ok(registry.get('problem').textContent.includes('changed after installation'));
+    // A Flash Player changed after installation is refused, and so is the game.
+    render(baseState({ ...ARMED_FLASH, armed: false, locked: true, tampered: true }, IDLE_SOCIAL));
+    assert.strictEqual(registry.get('play').disabled, true, 'a tampered Flash Player cannot be started');
+    assert.ok(registry.get('problem').textContent.includes('Flash Player files were changed'), registry.get('problem').textContent);
+    assert.ok(registry.get('problem').textContent.includes('Reinstall the launcher to play'));
     assert.strictEqual(registry.get('problem').className, 'problem bad');
 
-    // A broken Flash Player takes away Legacy only; its fault is said before FlashBrowser's.
-    render(
-        baseState({ ...ARMED_FLASH, armed: false, locked: true, tampered: true }, IDLE_SOCIAL, {
-            flashBrowser: { ...READY_BROWSER, ready: false, found: false }
-        })
-    );
-    assert.strictEqual(registry.get('play').disabled, false, 'Ruffle does not need Flash Player');
-    assert.strictEqual(registry.get('play-projector').disabled, true);
-    assert.ok(registry.get('problem').textContent.includes('Flash Player files were changed'), registry.get('problem').textContent);
-    assert.ok(registry.get('problem').textContent.includes('main button still plays'));
+    // A missing one is no longer "the main button still plays": it is what stops the game.
+    render(baseState({ ...MISSING_FLASH, locked: true }, IDLE_SOCIAL));
+    assert.strictEqual(registry.get('play').disabled, true);
+    assert.strictEqual(registry.get('problem').className, 'problem bad');
+    assert.strictEqual(registry.get('problem').textContent, 'Flash Player is missing from this install. Reinstall the launcher to play.');
 
-    // A missing Flash Player is a warning now, not a dead end.
-    render(baseState({ ...MISSING_FLASH, locked: true }, IDLE_SOCIAL, { flashBrowser: READY_BROWSER }));
-    assert.strictEqual(registry.get('play').disabled, false);
-    assert.strictEqual(registry.get('play-projector').disabled, true);
-    assert.strictEqual(registry.get('problem').className, 'problem');
-    assert.ok(registry.get('problem').textContent.includes('Flash Player is missing from this install'));
+    // A checkout points the launcher at one by hand.
+    render(baseState(MISSING_FLASH, IDLE_SOCIAL));
+    assert.strictEqual(registry.get('problem').textContent, 'Flash Player is missing. Point the launcher at it to play.');
+    assert.strictEqual(registry.get('browse-flash').hidden, false, 'a checkout offers the Flash Player picker');
 
-    // What keeps the main button from playing outranks a Legacy fault.
+    // One built for an architecture this machine cannot run.
+    render(baseState({ ...ARMED_FLASH, armed: false, architectures: ['arm64'], archMismatch: true }, IDLE_SOCIAL));
+    assert.strictEqual(registry.get('play').disabled, true);
+    assert.ok(registry.get('problem').textContent.includes('arm64 program and cannot run on this machine'));
+
+    // The answer to the player's own pick comes before the Flash Player it is about.
+    render({ ...baseState(MISSING_FLASH, IDLE_SOCIAL), notice: 'That is not the standalone Flash Player (flashplayer_32_sa).' });
+    assert.strictEqual(registry.get('problem').textContent, 'That is not the standalone Flash Player (flashplayer_32_sa).');
+
+    // Both the Flash Player and the server keep the game from starting; the Flash Player is said.
     render({ ...baseState(MISSING_FLASH, IDLE_SOCIAL), serverReachable: false });
+    assert.ok(registry.get('problem').textContent.includes('Flash Player is missing'));
+    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL), serverReachable: false });
     assert.strictEqual(registry.get('problem').textContent, 'Could not reach http://example.test/');
 
-    // Which engine the game is running in shows in the status line.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { flashBrowser: READY_BROWSER }));
-    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { flashBrowser: READY_BROWSER, gameEngine: 'ruffle' }), gameRunning: true });
-    assert.strictEqual(registry.get('status').textContent, 'The game is running (Ruffle).');
-    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { flashBrowser: READY_BROWSER, gameEngine: 'projector' }), gameRunning: true });
-    assert.strictEqual(registry.get('status').textContent, 'The game is running (Legacy).');
-    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { flashBrowser: READY_BROWSER, gameEngine: 'flashbrowser' }), gameRunning: true });
-    assert.strictEqual(registry.get('status').textContent, 'The game is running (FlashBrowser).');
+    // A failed play says why.
+    render(baseState(ARMED_FLASH, IDLE_SOCIAL));
+    const launcher = registry.launcher;
+    const play = launcher.play;
+    launcher.play = async () => ({ ok: false, message: 'Flash Player could not be started: ENOENT' });
+    await press('play');
+    launcher.play = play;
+    assert.strictEqual(registry.get('problem').textContent, 'Flash Player could not be started: ENOENT');
+    assert.strictEqual(registry.get('play').disabled, false, 'the button comes back for another try');
 
-    console.log('[test-launcher-status] Ruffle is the main button, Legacy and FlashBrowser next to it: OK');
+    // The status line while the game runs names no engine, whatever an older state carried.
+    for (const gameEngine of [undefined, 'ruffle', 'projector', 'flashbrowser']) {
+        render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL), gameEngine, gameRunning: true });
+        assert.strictEqual(registry.get('status').textContent, 'The game is running.');
+    }
+
+    console.log('[test-launcher-status] one play button, and it plays Legacy: OK');
 }
 
 /** While a sign-in waits on the browser, its link can be copied -- and only then. */
@@ -425,8 +416,7 @@ async function main() {
     // There is no Flash row any more: the banner is where it is said.
     render(baseState({ ...ARMED_FLASH, armed: false, locked: true, tampered: true }, IDLE_SOCIAL));
     assert.ok(registry.get('problem').textContent.includes('Reinstall'), registry.get('problem').textContent);
-    assert.strictEqual(registry.get('play-projector').disabled, true, 'a tampered Flash Player cannot be started');
-    assert.strictEqual(registry.get('play').disabled, false, 'and Ruffle, the main button, still plays');
+    assert.strictEqual(registry.get('play').disabled, true, 'a tampered Flash Player cannot be started');
     assert.strictEqual(registry.get('browse-flash').hidden, true, 'an installed launcher offers no Flash Player picker');
 
     // Everything idle is normal: presence and chat both start with the game.
@@ -609,7 +599,7 @@ async function main() {
 
     console.log('[test-launcher-status] status rows and the account row render correctly in every state');
 
-    await checkPlayButtons(render, registry, plays);
+    await checkPlayButton(render, registry, plays);
     await checkCopySignInLink(render, registry, plays);
     await checkLoginCode(render, registry, plays);
     await checkDamageMeterButton(render, registry, plays);
