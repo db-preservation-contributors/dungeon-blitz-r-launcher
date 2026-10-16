@@ -547,10 +547,58 @@ async function main() {
     assert.strictEqual(row(rows, 'Version').tone, 'ok');
     assert.strictEqual(registry.get('update-install').hidden, false, 'the restart button appears when the update is complete');
 
+    assert.strictEqual(registry.get('update-actions').hidden, false, 'the restart button shows with no problem banner');
+    assert.strictEqual(registry.get('update-download').hidden, true, 'an installable update has no download link');
+
+    // A build that cannot install updates itself (macOS, portable, 32-bit setup): the row says
+    // which version is out and a Download button asks main.js to open it, naming no URL.
+    render(
+        baseState(ARMED_FLASH, IDLE_SOCIAL, {
+            update: {
+                mode: 'notice',
+                state: 'available',
+                percent: 0,
+                version: '1.6.0',
+                asset: 'DungeonBlitzR-Launcher-1.6.0-mac-x64.dmg',
+                error: '',
+                currentVersion: '1.0.0'
+            }
+        })
+    );
+    rows = rowsFrom(registry);
+    assert.strictEqual(row(rows, 'Version').value, 'v1.0.0 - launcher 1.6.0 is available');
+    assert.strictEqual(row(rows, 'Version').tone, 'ok');
+    assert.match(row(rows, 'Version').detail, /DungeonBlitzR-Launcher-1\.6\.0-mac-x64\.dmg/);
+    assert.strictEqual(registry.get('update-install').hidden, true, 'nothing to restart into');
+    assert.strictEqual(registry.get('update-download').hidden, false, 'the download button appears');
+    assert.strictEqual(registry.get('update-download').textContent, 'Download 1.6.0');
+    assert.strictEqual(registry.get('update-actions').hidden, false);
+    const downloads = [];
+    registry.launcher.updateDownload = async (...args) => {
+        downloads.push(args);
+        return true;
+    };
+    await registry.get('update-download').listeners.click();
+    assert.deepStrictEqual(downloads, [[]], 'the renderer passes no URL to updateDownload');
+
+    // The same build, up to date: no button, and the hover says why there is no install.
+    render(
+        baseState(ARMED_FLASH, IDLE_SOCIAL, {
+            update: { mode: 'notice', state: 'not-available', percent: 0, version: '', error: '', currentVersion: '1.0.0' }
+        })
+    );
+    rows = rowsFrom(registry);
+    assert.strictEqual(row(rows, 'Version').value, 'v1.0.0 - up to date');
+    assert.match(row(rows, 'Version').detail, /cannot install it itself/);
+    assert.strictEqual(registry.get('update-download').hidden, true);
+    assert.strictEqual(registry.get('update-actions').hidden, true);
+
     render(baseState(ARMED_FLASH, IDLE_SOCIAL, { update: { state: 'disabled', percent: 0, version: '', error: '', currentVersion: '1.0.4' } }));
     rows = rowsFrom(registry);
     assert.strictEqual(row(rows, 'Version').value, 'v1.0.0', 'a development checkout shows just its version');
     assert.strictEqual(registry.get('update-install').hidden, true);
+    assert.strictEqual(registry.get('update-download').hidden, true);
+    assert.strictEqual(registry.get('update-actions').hidden, true);
 
     // A remembered account replaces the sign-in button entirely.
     render(

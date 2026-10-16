@@ -18,7 +18,9 @@ const elements = {
     accountName: document.getElementById('account-name'),
     forget: document.getElementById('forget'),
     versions: document.getElementById('versions'),
+    updateActions: document.getElementById('update-actions'),
     updateInstall: document.getElementById('update-install'),
+    updateDownload: document.getElementById('update-download'),
     gameStatsSync: document.getElementById('game-stats-sync'),
     damageMeterOpen: document.getElementById('damage-meter-open'),
     tools: document.getElementById('tools'),
@@ -105,8 +107,18 @@ function engineRows(state) {
     } else if (update.state === 'downloaded') {
         updateValue = `${current} - ${update.version} ready, restart to install`;
         updateTone = 'ok';
+    } else if (update.state === 'available') {
+        // A build that cannot install updates itself (macOS, portable, 32-bit setup): the
+        // Download button below opens the new release's file in the browser.
+        updateValue = `${current} - launcher ${update.version} is available`;
+        updateTone = 'ok';
+        updateDetail = `Download opens ${update.asset || 'the release page'} on GitHub; install it over this copy.`;
     } else if (update.state === 'checking') {
         updateValue = `${current} - checking...`;
+    }
+    if (update.mode === 'notice' && update.state !== 'available') {
+        updateDetail =
+            'The launcher checks GitHub for a newer version after start and every six hours. This build cannot install it itself, so a download link appears here.';
     }
 
     // The Discord widget is filled by the game server, which holds the bot token; the
@@ -332,6 +344,12 @@ function render(state) {
     // The restart-to-update button appears only when a full update is sitting downloaded;
     // every other state leaves the strip to say what is happening instead.
     elements.updateInstall.hidden = !state.update || state.update.state !== 'downloaded';
+    // Builds that cannot install an update get a download link for it instead.
+    elements.updateDownload.hidden = !state.update || state.update.state !== 'available';
+    if (!elements.updateDownload.hidden) {
+        elements.updateDownload.textContent = `Download ${state.update.version}`;
+    }
+    elements.updateActions.hidden = elements.updateInstall.hidden && elements.updateDownload.hidden;
     // Syncing only means something once a session has given the launcher a server to ask, so
     // the button stays off the sign-in screen where there is nothing to write yet.
     elements.gameStatsSync.hidden = !state.gameStats || !state.gameStats.running || state.gameStats.enabled === false;
@@ -406,6 +424,10 @@ elements.relaunch.addEventListener('click', () => {
 
 elements.updateInstall.addEventListener('click', () => {
     void window.launcher.updateInstall();
+});
+
+elements.updateDownload.addEventListener('click', () => {
+    void window.launcher.updateDownload();
 });
 
 elements.gameStatsSync.addEventListener('click', async () => {

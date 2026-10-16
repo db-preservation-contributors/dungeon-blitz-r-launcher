@@ -272,7 +272,7 @@ The sign-in screen carries a status strip with four rows, the ones a player care
 | `Discord status` | Whether Discord shows the player as playing |
 | `Lobby chat` | Whether the player's Discord lobby is connected |
 | `Game stats` | Whether the Discord widget profile was written |
-| `Version` | This launcher's version, and any update being downloaded or ready to install |
+| `Version` | This launcher's version, and any update being downloaded, ready to install, or out with a download link |
 
 Hovering a value shows the detail: the local presence endpoint, or the last error.
 
@@ -395,8 +395,9 @@ architecture there is no build of at all (arm64 Windows running an arm64 build).
 refusal names the exact x64 installer to download instead.
 
 The ia32 run still never publishes an update manifest (see "Why Windows is built as two
-runs"). Auto-update therefore always offers the x64 installer, and a 32-bit player updates
-by downloading the new ia32 installer.
+runs"), so `latest.yml` only ever names the x64 installer, and that one quits on 32-bit
+Windows. The ia32 builds therefore do not self-update: they get the update notice described
+under "Auto-update", which links the new ia32 installer (or portable .exe).
 
 ### Windows versions
 
@@ -792,7 +793,7 @@ into the package intact, and attaches the installers to a draft GitHub release t
 
 | Platform | Files |
 | --- | --- |
-| Windows | `...-win-x64-setup.exe` (64-bit Windows; auto-updates), `...-win-x64-portable.exe`, `...-win-ia32-setup.exe` (32-bit Windows), `...-win-ia32-portable.exe` |
+| Windows | `...-win-x64-setup.exe` (64-bit Windows; auto-updates), `...-win-x64-portable.exe`, `...-win-ia32-setup.exe` (32-bit Windows), `...-win-ia32-portable.exe` (all but the x64 setup get an update notice) |
 | macOS | `...-mac-x64.dmg`, `...-mac-x64.zip` |
 | Linux | `...-linux-x86_64.AppImage`, `...-linux-amd64.deb` |
 
@@ -844,7 +845,9 @@ macOS, plus `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` for no
 
 ## Auto-update
 
-An installed launcher updates itself. `lib/update.js` wraps electron-updater with GitHub
+An installed launcher updates itself on the Windows x64 installer and the Linux AppImage
+and .deb; macOS and the portable and 32-bit Windows builds get a notice with a download
+link instead (see the table below). `lib/update.js` wraps electron-updater with GitHub
 releases as the feed (`build.publish` in package.json): it checks a few seconds after
 start and then every six hours, downloads a new version in the background and shows an
 `Update` row in the status strip -- `downloading 1.1.0 - 42%`, then `1.1.0 ready -
@@ -857,9 +860,32 @@ the next quit (`autoInstallOnAppQuit`). Dev checkouts and dev AppImages never se
 Two feed rules are easy to trip over: the release job uploads the `latest*.yml` metadata
 alongside the installers (`--publish always`), and the draft release must be **published**
 before any installed launcher sees it -- GitHub's update provider cannot read a draft.
-And on macOS an update can only replace a signed app: these unsigned builds show the
-check as an error there, so macOS players update by downloading the new .dmg. `npm run
-test-updater` pins the state machine against a fake updater, no Electron or network.
+`npm run test-updater` pins the state machine against a fake updater, no Electron or
+network.
+
+Not every build can replace itself, so which one does what is decided at start
+(`updateRoute()` in `lib/updateNotice.js`):
+
+| Build | Updates by |
+| --- | --- |
+| Windows x64 setup | electron-updater: download, then **Restart to update** or on quit |
+| Linux AppImage | electron-updater, in place |
+| Linux .deb | electron-updater's DebUpdater (`dpkg -i` behind a password prompt) |
+| macOS .dmg / .zip | a notice: Squirrel.Mac only installs over a signed app, and these are unsigned |
+| Windows portable .exe (x64, ia32) | a notice: the updater would install the x64 setup beside it instead |
+| Windows ia32 setup | a notice: `latest.yml` only names the x64 setup, which refuses 32-bit Windows |
+
+The notice keeps the same schedule. It asks GitHub's API for the latest published release
+of the repository in `build.publish` (an installed launcher reads it from electron-builder's
+`app-update.yml`, since the packed package.json has no `build`), and when that is newer the
+Version row reads `v1.5.0 - launcher 1.6.0 is available` with a **Download 1.6.0** button.
+The button opens this build's own file in the browser -- the .dmg, or the
+`win-<arch>-portable.exe` / `win-ia32-setup.exe` -- or the release page if that file is
+missing; the player installs it over the old copy. Nothing is downloaded by the launcher,
+and an offline moment or a rate limit is only logged and retried at the next check. The
+main process opens only the link the check itself produced, whatever the window asks.
+`tools/test-update-notice.js` pins the routes, the version compare, the file picked for each
+build and the quiet failures against a fake `fetch`.
 
 On Windows the update is the NSIS setup installer. electron-updater runs it with
 `--updated --force-run` after **Restart to update** and with `--updated /S` on quit. That
@@ -900,6 +926,8 @@ drives the module against a local mock.
 | `tools/test-windows-support.js` | Which Windows versions and architectures start, and how the others are refused |
 | `tools/test-projector.js` | Finding Flash Player, the SWF it opens, the pinned downloads, its fingerprint, and the presence and region-latency work done for the game page |
 | `tools/test-legacy-engine.js` | `main.js` itself, with Electron stubbed: every play starts the standalone Flash Player whatever engine an older launcher saved, a missing Flash Player stops the play, and the launcher state names no other engine |
+| `tools/test-updater.js` | The electron-updater state machine, the restart gate and the check cadence |
+| `tools/test-update-notice.js` | Which builds self-update and which get a notice, the release feed, the download each build is offered, and quiet failures |
 | `tools/test-discord-login-key.js` | The Discord sign-in's one-time key: only its hash in the browser URL, the key in a header, and a login finished at another address still reaching the launcher |
 
 `.github/workflows/tests.yml` runs them on every push and pull request, so a broken Flash
@@ -926,7 +954,9 @@ closes the game.
 - The launcher shell runs sandboxed, with `contextIsolation: true`,
   `nodeIntegration: false` and plugins disabled; its only contact with the main process is the fixed set of IPC calls in
   `preload.js` (state, sign-in, forget, play, choose Flash Player, move to Applications,
-  open the damage meter, relaunch, quit) and it loads no remote content at all.
+  open the damage meter, restart to update, open the update download, relaunch, quit) and
+  it loads no remote content at all. The update download takes no URL from the window: the
+  main process opens only the GitHub link its own release check found.
 - The damage meter's window is locked down the same way, with a preload of its own
   (`lib/damageMeter/preload.js`) that has two calls: a command to the meter, and the view it
   sends back. The main process takes commands from that window only. The meter reads the
