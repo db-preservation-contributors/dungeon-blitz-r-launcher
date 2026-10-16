@@ -173,7 +173,14 @@ bare 60 fps movie in 32.0.0.465, per 180 frames:
 | 1 ms (the launcher's) | 60 fps | 6-9 | 22-24 ms |
 
 What is left is the game's own frame cost: a frame whose work takes longer than 16.7 ms still
-drops below 60. `DB_FLASH_TIMER=0` on the launcher leaves Flash Player's timer alone. Linux
+drops below 60. In game the window size decides it: in the same fight Legacy held 57-61 fps
+with the game at 84% scale, and 40-45 fps at its 125% cap in a large window.
+
+`DB_FLASH_RENDER=direct` (or `gpu`) is a test switch for that: Windows then starts Flash Player
+on a loader file (lib/loaderSwf.js) whose FileAttributes ask for hardware rendering
+(UseDirectBlit or UseGPU). The game's own SWF asks for neither, and the first movie's flags
+are what Flash Player goes by. The loader then loads the game into level 0, as it does on
+macOS. The log says `[Flash] Render mode: direct`. `DB_FLASH_TIMER=0` on the launcher leaves Flash Player's timer alone. Linux
 has its own fix for the same tick (`native_flash/flash_short_tick.c`).
 
 | Platform | What ships | Notes |

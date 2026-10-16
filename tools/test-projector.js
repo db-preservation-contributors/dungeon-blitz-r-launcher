@@ -146,6 +146,22 @@ function testFindProjector() {
         const launch = projector.prepareLaunch(found, 'http://a.example/p/cbp/DungeonBlitz.swf', { platform: 'win32', workDir: root });
         assert.deepStrictEqual(launch.args, ['http://a.example/p/cbp/DungeonBlitz.swf'], 'the movie is the one argument');
         assert.ok(launch.command, 'there is something to execute');
+
+        // DB_FLASH_RENDER: Windows starts on a loader whose flags ask for hardware rendering.
+        assert.strictEqual(projector.flashRenderMode({}), '');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: ' Direct ' }), 'direct');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'gpu' }), 'gpu');
+        assert.strictEqual(projector.flashRenderMode({ DB_FLASH_RENDER: 'vulkan' }), '', 'an unknown mode is ignored');
+        const direct = projector.prepareLaunch(found, 'http://a.example/p/cbp/DungeonBlitz.swf', {
+            platform: 'win32',
+            workDir: root,
+            env: { DB_FLASH_RENDER: 'direct' }
+        });
+        const loaderPath = path.join(root, projector.WINDOWS_LOADER_FILE);
+        assert.deepStrictEqual(direct.args, [loaderPath], 'started on the loader file');
+        assert.strictEqual(direct.cwd, root);
+        assert.ok(fs.readFileSync(loaderPath).includes(Buffer.from([0x44, 0x11, 0x41, 0, 0, 0])), 'UseDirectBlit + UseNetwork');
+        assert.ok(fs.readFileSync(loaderPath).includes(Buffer.from('http://a.example/p/cbp/DungeonBlitz.swf')));
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -392,6 +408,9 @@ function testWindowTitle() {
     assert.ok(swf.includes(getUrl), 'getURL(game, "_level0")');
     assert.ok(swf.includes(Buffer.from([0x44, 0x11, 0x01, 0, 0, 0])), 'FileAttributes with UseNetwork');
     assert.throws(() => buildLoaderSwf('http://a\u0000b'), /NUL/);
+    assert.ok(buildLoaderSwf(url, { render: 'direct' }).includes(Buffer.from([0x44, 0x11, 0x41, 0, 0, 0])), 'UseDirectBlit');
+    assert.ok(buildLoaderSwf(url, { render: 'gpu' }).includes(Buffer.from([0x44, 0x11, 0x21, 0, 0, 0])), 'UseGPU');
+    assert.throws(() => buildLoaderSwf(url, { render: 'vulkan' }), /unknown render mode/);
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'db-title-'));
     try {

@@ -18,6 +18,7 @@ const {
     findFlashPreload,
     findProjector,
     findVendoredProjector,
+    flashRenderMode,
     isChosenProjector,
     prepareLaunch,
     resolveSwfUrl,
@@ -738,6 +739,10 @@ async function launchProjector(serverUrl, settings) {
         return { ok: false, message: `Flash Player could not be prepared: ${(error && error.message) || error}` };
     }
     const { command, args, cwd, env } = launch;
+    const render = flashRenderMode();
+    if (render) {
+        console.log(`[Flash] Render mode: ${render} (DB_FLASH_RENDER), through a loader file`);
+    }
     console.log(`[Flash] Starting ${command} ${args.join(' ')}${cwd ? ` in ${cwd}` : ''} for ${swfUrl}`);
 
     const started = await spawnGame('projector', 'Flash Player', { command, args, cwd, env });
