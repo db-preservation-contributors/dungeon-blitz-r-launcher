@@ -398,6 +398,149 @@ function testIntegrity() {
     console.log('[test-projector] a changed, swapped or unrecorded Flash Player is refused: OK');
 }
 
+function writeFile(file, body = 'x') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, body);
+}
+
+/**
+ * electron-builder's packaging copy is not a byte-for-byte mirror of vendor/: it drops empty
+ * folders, and a copier may turn symlinks into the files they point at. 1.2.2's first macOS
+ * build failed its own fingerprint check on that. The digest describes what runs -- files and
+ * their contents -- so both copies of a bundle like Flash Player.app match, while a changed,
+ * added or removed file still does not.
+ */
+function testPackagingCopies() {
+    if (process.platform === 'win32') {
+        // Creating symlinks needs a privilege CI's Windows runners may not have; the suite runs
+        // on Linux, and the case it pins is a macOS bundle.
+        console.log('[test-projector] (skipped on Windows: symlinks) packaging copies keep the fingerprint');
+        return;
+    }
+    const { treeDigest } = require('../lib/integrity');
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'db-packaging-'));
+    try {
+        const original = path.join(scratch, 'bundle', 'Flash Player.app');
+        const framework = path.join(original, 'Contents', 'Frameworks', 'Player.framework');
+        writeFile(path.join(framework, 'Versions', 'A', 'Player'), 'framework binary');
+        writeFile(path.join(framework, 'Versions', 'A', 'Resources', 'Info.plist'), 'plist');
+        fs.symlinkSync('A', path.join(framework, 'Versions', 'Current'));
+        fs.symlinkSync('Versions/Current/Player', path.join(framework, 'Player'));
+        fs.symlinkSync('Versions/Current/Resources', path.join(framework, 'Resources'));
+        writeFile(path.join(original, 'Contents', 'MacOS', 'Flash Player'), 'player binary');
+        fs.mkdirSync(path.join(original, 'Contents', 'Resources', 'en.lproj'), { recursive: true });
+        fs.mkdirSync(path.join(original, 'Contents', 'Resources', 'de.lproj'), { recursive: true });
+        const expected = treeDigest(original);
+        assert.match(expected, /^[0-9a-f]{64}$/);
+
+        // A copy without the empty folders and with every link replaced by what it points at.
+        const flattened = path.join(scratch, 'flattened', 'Flash Player.app');
+        const copyDereferenced = (from, to) => {
+            if (fs.statSync(from).isDirectory()) {
+                const entries = fs.readdirSync(from);
+                if (!entries.length) {
+                    return;
+                }
+                fs.mkdirSync(to, { recursive: true });
+                for (const entry of entries) {
+                    copyDereferenced(path.join(from, entry), path.join(to, entry));
+                }
+                return;
+            }
+            fs.mkdirSync(path.dirname(to), { recursive: true });
+            fs.copyFileSync(from, to);
+        };
+        copyDereferenced(original, flattened);
+        assert.ok(!fs.existsSync(path.join(flattened, 'Contents', 'Resources', 'en.lproj')), 'the premise: empty folders are gone');
+        assert.ok(!fs.lstatSync(path.join(flattened, 'Contents', 'Frameworks', 'Player.framework', 'Versions', 'Current')).isSymbolicLink());
+        assert.strictEqual(treeDigest(flattened), expected, 'a packaging copy keeps the fingerprint');
+
+        fs.writeFileSync(path.join(flattened, 'Contents', 'MacOS', 'Flash Player'), 'patched');
+        assert.notStrictEqual(treeDigest(flattened), expected, 'a changed file in it still does not');
+        fs.writeFileSync(path.join(flattened, 'Contents', 'MacOS', 'Flash Player'), 'player binary');
+        writeFile(path.join(flattened, 'Contents', 'MacOS', 'inject.dylib'), 'x');
+        assert.notStrictEqual(treeDigest(flattened), expected, 'nor an added one');
+
+        // A link pointing back up the tree is recorded, not followed forever; a dangling one counts.
+        fs.symlinkSync('..', path.join(original, 'Contents', 'loop'));
+        assert.match(treeDigest(original), /^[0-9a-f]{64}$/, 'a link loop does not hang the check');
+        fs.symlinkSync('missing-target', path.join(original, 'Contents', 'dangling'));
+        assert.match(treeDigest(original), /^[0-9a-f]{64}$/);
+    } finally {
+        fs.rmSync(scratch, { recursive: true, force: true });
+    }
+    console.log('[test-projector] packaging copies keep the fingerprint; changes to them do not: OK');
+}
+
+/**
+ * 1.2.2 crashed at start on Windows and macOS: an installed launcher has Electron's embedded asar
+ * integrity on, and Electron kills the process when its asar-aware `fs` touches an archive it has
+ * no record for. The fingerprint walks vendored trees with lib/rawFs.js for that reason. Here
+ * `fs` stands in for Electron's (it notes every .asar path it is handed) and `original-fs` is
+ * the plain one: fingerprinting and checking a tree that holds an .asar must never hand
+ * Electron's `fs` an .asar path.
+ */
+function testNoAsarAwareFs() {
+    const Module = require('module');
+    const realFs = require('fs');
+    const touched = [];
+    const asarAware = new Proxy(realFs, {
+        get(target, property) {
+            const value = target[property];
+            if (typeof value !== 'function') {
+                return value;
+            }
+            return (...args) => {
+                if (typeof args[0] === 'string' && /\.asar([\\/]|$)/i.test(args[0])) {
+                    touched.push(`fs.${String(property)}(${args[0]})`);
+                }
+                return value.apply(target, args);
+            };
+        }
+    });
+
+    const libDir = path.join(__dirname, '..', 'lib');
+    const fresh = ['rawFs', 'integrity', 'binary'].map((name) => require.resolve(path.join(libDir, name)));
+    const originalLoad = Module._load;
+    Module._load = function load(request, parent, isMain) {
+        if (parent && parent.filename && parent.filename.startsWith(libDir)) {
+            if (request === 'fs') {
+                return asarAware;
+            }
+            if (request === 'original-fs') {
+                return realFs;
+            }
+        }
+        return originalLoad.call(this, request, parent, isMain);
+    };
+    for (const file of fresh) {
+        delete require.cache[file];
+    }
+
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'db-asar-'));
+    try {
+        const integrity = require(path.join(libDir, 'integrity'));
+        const root = path.join(scratch, 'Flash Player.app');
+        writeFile(path.join(root, 'Contents', 'MacOS', 'Flash Player'), 'player');
+        writeFile(path.join(root, 'Contents', 'Resources', 'bundled.asar'), 'an archive of its own');
+        const record = path.join(scratch, 'projector.integrity.json');
+        integrity.writeExpected(root, { platform: 'darwin', version: '32.0.0.465' }, record);
+        assert.deepStrictEqual(
+            integrity.verifyProjector(root, { integrityPath: record, platform: 'darwin' }),
+            { ok: true, reason: '' },
+            'the tree is checked against its fingerprint'
+        );
+        assert.deepStrictEqual(touched, [], "Electron's asar-aware fs is never handed an .asar path");
+    } finally {
+        Module._load = originalLoad;
+        for (const file of fresh) {
+            delete require.cache[file];
+        }
+        fs.rmSync(scratch, { recursive: true, force: true });
+    }
+    console.log("[test-projector] vendored trees are fingerprinted without Electron's asar handling: OK");
+}
+
 /**
  * The window title: never the game's address. On macOS Flash Player titles the window with
  * exactly what it was started on, so it is started on a local file named for the game that
@@ -455,6 +598,8 @@ function testWindowTitle() {
 async function main() {
     testWindowTitle();
     testIntegrity();
+    testPackagingCopies();
+    testNoAsarAwareFs();
     testLockFile();
     testSwfUrl();
     await testResolveSwfUrl();
