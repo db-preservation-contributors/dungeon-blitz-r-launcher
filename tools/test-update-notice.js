@@ -164,18 +164,44 @@ function testFeed() {
     };
     assert.deepStrictEqual(resolvePublishTarget({ packageJson: stripped, resourcesPath: '/res', readFile }), { owner: OWNER, repo: REPO });
 
-    // Neither: no feed, so main.js does not arm a check.
+    // No app-update.yml in the build: package.json's repository, which survives packaging.
     const missing = () => {
         throw new Error('ENOENT');
     };
-    assert.strictEqual(resolvePublishTarget({ packageJson: stripped, resourcesPath: '/res', readFile: missing }), null);
+    assert.deepStrictEqual(
+        resolvePublishTarget({ packageJson: stripped, resourcesPath: '/res', readFile: missing }),
+        { owner: OWNER, repo: REPO },
+        'a missing app-update.yml must not switch the notice off'
+    );
+    for (const url of [
+        'git+https://github.com/theminesastudios/dungeon-blitz-r-launcher.git',
+        'https://github.com/theminesastudios/dungeon-blitz-r-launcher',
+        'git@github.com:theminesastudios/dungeon-blitz-r-launcher.git',
+        'github:theminesastudios/dungeon-blitz-r-launcher'
+    ]) {
+        assert.deepStrictEqual(
+            resolvePublishTarget({ packageJson: { ...stripped, repository: { type: 'git', url } }, resourcesPath: '/res', readFile: missing }),
+            { owner: OWNER, repo: REPO },
+            url
+        );
+    }
+
+    // None of the three: no feed, so main.js does not arm a check.
+    const bare = { ...stripped };
+    delete bare.repository;
+    assert.strictEqual(resolvePublishTarget({ packageJson: bare, resourcesPath: '/res', readFile: missing }), null);
     assert.strictEqual(
-        resolvePublishTarget({ packageJson: stripped, resourcesPath: '/res', readFile: () => 'provider: generic\nurl: https://x\n' }),
+        resolvePublishTarget({ packageJson: bare, resourcesPath: '/res', readFile: () => 'provider: generic\nurl: https://x\n' }),
         null,
         'only a GitHub feed has a releases API'
     );
+    assert.strictEqual(
+        resolvePublishTarget({ packageJson: { ...bare, repository: 'https://gitlab.com/a/b' }, resourcesPath: '/res', readFile: missing }),
+        null,
+        'a repository that is not on GitHub is not a feed'
+    );
 
-    console.log('[test-update-notice] the feed comes from build.publish or app-update.yml: OK');
+    console.log('[test-update-notice] the feed comes from build.publish, app-update.yml or repository: OK');
 }
 
 function testVersions() {
