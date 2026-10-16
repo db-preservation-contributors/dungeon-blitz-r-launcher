@@ -1,7 +1,7 @@
 # Dungeon Blitz: R Launcher
 
-A desktop launcher that plays Dungeon Blitz in FlashBrowser (the game page with the Flash
-plugin) or in Adobe's standalone Flash Player, so players do not need a browser that still
+A desktop launcher that plays Dungeon Blitz in Adobe's standalone Flash Player (Legacy) or in
+FlashBrowser (the game page with the Flash plugin), so players do not need a browser that still
 has Flash. It ships for Windows, macOS and Linux.
 
 The launcher is a sign-in screen, not a control panel. It asks for one thing — sign in
@@ -60,14 +60,17 @@ The launcher window has two play buttons:
 
 | Button | Engine | For |
 | --- | --- | --- |
-| **Open the game** | FlashBrowser: the game page with FlashBrowser's PPAPI Flash plugin, in a Chromium 87 window | Everyone; the default |
-| **Play Legacy (Adobe Flash Player 32)** | Adobe's standalone Flash Player (`flashplayer_32_sa`) | Players who see a delay collecting loot in FlashBrowser |
+| **Open the game** | Legacy: Adobe's standalone Flash Player (`flashplayer_32_sa`) | Everyone; the default |
+| **Play in FlashBrowser** | FlashBrowser: the game page with FlashBrowser's PPAPI Flash plugin, in a Chromium 87 window | Players Legacy does not work for |
 
-Both buttons are always on screen. The launcher remembers the button a player last pressed,
-and a remembered player's automatic start at launch uses it. 32-bit Windows and Linux have no
-FlashBrowser (there is no plugin for them), so there the main button plays Legacy as well.
+The launcher remembers the button a player last pressed, and a remembered player's automatic
+start at launch uses it. A choice saved by a launcher whose main button was still FlashBrowser
+(the `engine` key of `launcher-state.json`) is dropped, since pressing that main button is not a
+choice of FlashBrowser over Legacy; the pick is now saved as `playEngine`. 32-bit Windows and
+Linux have no FlashBrowser (there is no plugin for them), so there the FlashBrowser button is
+not shown.
 
-### FlashBrowser (default)
+### FlashBrowser
 
 The PPAPI plugin is FlashBrowser's: Flash 32.0.0.363, the last build before Adobe's
 2021-01-12 kill switch. Chromium dropped PPAPI in version 88, and the launcher itself now
@@ -118,7 +121,7 @@ page, as they always did in a browser. `lib/gameHost.js` stays off.
 | --- | --- |
 | `win32-x64` | Windows x64 packages; Windows on Arm runs it under emulation |
 | `darwin-x64` | The macOS package; Apple Silicon runs it under Rosetta |
-| none | 32-bit Windows and Linux: both buttons play Legacy |
+| none | 32-bit Windows and Linux: Legacy only |
 
 The `FlashBrowser` workflow assembles it on Windows and macOS whenever the lock file, the
 game-window app, the plugin or the fetch script change. It then starts it exactly as the
@@ -127,12 +130,12 @@ that movie (`tools/check-flash-browser.js`). A page that merely lists "Shockwave
 proof: Chromium lists it for any plugin path, even one with no file behind it.
 
 `tools/preflight.js` fails a Windows x64 or macOS build that has no FlashBrowser, because
-its main button could never start. Set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1` to
+its FlashBrowser button could never start. Set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1` to
 build one anyway; that package plays in Flash Player.
 
 ### The standalone Flash Player
 
-The **Legacy** button runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`,
+The main button, **Legacy**, runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`,
 the standalone player Adobe calls the projector. The launcher starts it on the game's SWF,
 straight from the selected server:
 
@@ -146,7 +149,32 @@ browser plugins do.
 
 The PPAPI plugin in FlashBrowser sits behind Chromium's plugin host, compositor and IPC.
 Some players feel that as input and frame delay, most of all when collecting loot. Flash
-Player has none of it, which is what the Legacy button is for.
+Player has none of it, which is why Legacy is the main button.
+
+#### A steady 60 fps on Windows
+
+Flash Player 32 paces its frames off the Windows timer and tops out at 60 fps, however high
+the game asks (it asks for 100) and however fast the display (measured on a 200 Hz screen).
+At Windows' default 15.6 ms timer tick a 16.7 ms frame keeps landing a tick late, so about
+one frame in nine takes 31-32 ms. Since Windows 10 2004 the timer resolution belongs to each
+process, so nothing outside Flash Player can lend it a finer one, and Flash Player never asks
+for one itself.
+
+So the launcher has Flash Player ask (`lib/flashTimer.js`): for each game the 32-bit
+PowerShell starts one thread in Flash Player at winmm.dll's own `timeBeginPeriod`, with the
+argument 1. Nothing is written into Flash Player's memory, the thread only runs once it has
+checked that winmm.dll sits at the same address in both processes, and the request lasts
+until Flash Player exits. The log says `[Flash] Timer resolution: ok: 1 ms`. Measured with a
+bare 60 fps movie in 32.0.0.465, per 180 frames:
+
+| Timer | Average | Frames over 20 ms | Worst frame |
+| --- | --- | --- | --- |
+| Windows default (15.6 ms) | 60 fps | 15-21 | 33 ms |
+| 1 ms (the launcher's) | 60 fps | 6-9 | 22-24 ms |
+
+What is left is the game's own frame cost: a frame whose work takes longer than 16.7 ms still
+drops below 60. `DB_FLASH_TIMER=0` on the launcher leaves Flash Player's timer alone. Linux
+has its own fix for the same tick (`native_flash/flash_short_tick.c`).
 
 | Platform | What ships | Notes |
 | --- | --- | --- |
@@ -301,7 +329,7 @@ Hovering a value shows the detail: the local presence endpoint, or the last erro
 
 Machine and engine details are not rows. A missing, changed or unrunnable FlashBrowser or
 Flash Player, or a Windows that is too old, is said in the problem banner above the strip
-instead. A FlashBrowser problem points at the Legacy button, which still plays. `main.js`
+instead. A FlashBrowser problem points at Legacy, the main button, which still plays. `main.js`
 prints the Flash Player line on the console, and `node tools/test-launcher-status.js`
 checks every state of the strip and the banner.
 
@@ -373,7 +401,7 @@ and 8 running. Electron 11 had stopped getting security fixes, so the launcher m
 supported Electron and gave up Windows 7, 8 and 8.1, which Electron dropped in version 23.
 
 FlashBrowser still needs the Flash host, so it ships its own Electron 11 as a separate program
-(see [FlashBrowser](#flashbrowser-default)). Only the game page runs on that old Chromium, in
+(see [FlashBrowser](#flashbrowser)). Only the game page runs on that old Chromium, in
 its own process and profile; the launcher, its IPC and its sign-in never do.
 
 Discord's consent screen still opens in the player's own browser rather than inside the app,

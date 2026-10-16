@@ -24,6 +24,7 @@ const {
     verifyFlashPreload
 } = require('./lib/projector');
 const { keepGameTitle } = require('./lib/windowTitle');
+const { boostFlashTimer } = require('./lib/flashTimer');
 const { describeWindows, unsupportedArchitectureMessage, unsupportedWindowsMessage } = require('./lib/windowsSupport');
 const { PresenceBridge } = require('./lib/presence');
 const { SocialBridge } = require('./lib/social');
@@ -143,11 +144,11 @@ function openDamageMeter() {
 // the page itself, so it needs none of this.
 const gameHost = new GameHost({ presence });
 
-// The two game engines. FlashBrowser -- the game page with FlashBrowser's PPAPI Flash plugin,
-// in a Chromium 87 window (lib/flashBrowser.js) -- is the default. Adobe's standalone Flash
-// Player (lib/projector.js) is the Legacy button, for players who see a delay collecting
-// loot in the plugin.
-const ENGINES = ['flashbrowser', 'projector'];
+// The two game engines. Legacy -- Adobe's standalone Flash Player (lib/projector.js) -- is the
+// default: nothing sits between it and the game, and it holds the game's frame rate best.
+// FlashBrowser -- the game page with FlashBrowser's PPAPI Flash plugin, in a Chromium 87
+// window (lib/flashBrowser.js) -- is the second button, where this system has one.
+const ENGINES = ['projector', 'flashbrowser'];
 
 let launcherWindow = null;
 // The program running the game -- FlashBrowser or the standalone Flash Player -- and which
@@ -223,7 +224,7 @@ function projectorReady() {
     return Boolean(projector && !projector.archMismatch && !projector.tampered);
 }
 
-/** Whether the game can be started in FlashBrowser, the default engine. */
+/** Whether the game can be started in FlashBrowser, the second engine. */
 function flashBrowserReady() {
     return Boolean(flashBrowser.found && !flashBrowser.tampered);
 }
@@ -231,23 +232,23 @@ function flashBrowserReady() {
 /**
  * The engine a plain "play" uses -- the start-up play of a remembered player, and the play
  * after a sign-in: the one the player last picked with a button, as long as it can run;
- * otherwise FlashBrowser, the default; otherwise the standalone Flash Player.
+ * otherwise Legacy, the default; otherwise FlashBrowser.
  */
 function preferredEngine() {
-    const saved = state.read().engine;
-    if (saved === 'projector' && projectorReady()) {
-        return 'projector';
-    }
+    const saved = state.read().playEngine;
     if (saved === 'flashbrowser' && flashBrowserReady()) {
         return 'flashbrowser';
     }
-    if (flashBrowserReady()) {
-        return 'flashbrowser';
+    if (saved === 'projector' && projectorReady()) {
+        return 'projector';
     }
     if (projectorReady()) {
         return 'projector';
     }
-    return flashBrowser.offered ? 'flashbrowser' : 'projector';
+    if (flashBrowserReady()) {
+        return 'flashbrowser';
+    }
+    return 'projector';
 }
 
 /** Why an engine cannot start the game right now, or '' when it can. */
@@ -748,6 +749,11 @@ async function launchProjector(serverUrl, settings) {
     const title = keepGameTitle(started.child.pid);
     started.child.once('exit', () => title.stop());
 
+    // A 1 ms Windows timer, so Flash Player holds a steady 60 fps (lib/flashTimer.js).
+    boostFlashTimer(started.child.pid, {
+        onResult: (result) => console.log(`[Flash] Timer resolution: ${result}`)
+    });
+
     gameHost.start({ serverUrl, presence: Boolean(settings.startDiscordBridge) });
     startAccountPolling();
     return { ok: true };
@@ -840,7 +846,7 @@ async function play({ engine: requested = '', serverId = '' } = {}) {
         return { ok: false, message: problem };
     }
 
-    state.write(chosen ? { serverId: selected.id, engine } : { serverId: selected.id });
+    state.write(chosen ? { serverId: selected.id, playEngine: engine } : { serverId: selected.id });
 
     // Before Flash Player starts, not after: the server signs the game's first connection
     // in from a pending hand-off, and the point of the saved token is that there is already

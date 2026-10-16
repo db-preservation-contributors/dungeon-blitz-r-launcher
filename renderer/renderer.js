@@ -9,7 +9,7 @@ const elements = {
     loginCodeError: document.getElementById('login-code-error'),
     play: document.getElementById('play'),
     altEngine: document.getElementById('alt-engine'),
-    playProjector: document.getElementById('play-projector'),
+    playFlashBrowser: document.getElementById('play-flashbrowser'),
     status: document.getElementById('status'),
     problem: document.getElementById('problem'),
     repair: document.getElementById('repair'),
@@ -209,29 +209,28 @@ function installWarning(state) {
 }
 
 /**
- * The two play buttons, always both on screen. The main one is FlashBrowser -- the game page
- * with the Flash plugin, the default. The second is Legacy: Adobe Flash Player 32, the
- * standalone player, for players who see a delay collecting loot. Where there is no
- * FlashBrowser (32-bit Windows, Linux) the main button plays in Flash Player too, so it never
- * sits there unable to start.
+ * The play buttons. The main one is Legacy: Adobe Flash Player 32, the standalone player, the
+ * default -- nothing sits between it and the game, and it holds the frame rate best. The
+ * second is FlashBrowser -- the game page with the Flash plugin -- shown only where there is
+ * one: 32-bit Windows and Linux have no plugin, so they get the main button alone.
  */
 function playButtons(state) {
     const flash = state.flash || {};
     const browser = state.flashBrowser || {};
     const hasServers = Array.isArray(state.servers) && state.servers.length > 0;
-    const projectorPlayable = Boolean(flash.armed && !flash.archMismatch && hasServers);
-
-    if (!browser.offered) {
-        return { mainEngine: 'projector', mainPlayable: projectorPlayable, projectorPlayable };
-    }
-    return { mainEngine: 'flashbrowser', mainPlayable: Boolean(browser.ready && hasServers), projectorPlayable };
+    return {
+        mainEngine: 'projector',
+        mainPlayable: Boolean(flash.armed && !flash.archMismatch && hasServers),
+        flashBrowserOffered: Boolean(browser.offered),
+        flashBrowserPlayable: Boolean(browser.offered && browser.ready && hasServers)
+    };
 }
 
 function applyPlayButtons(state) {
     const buttons = playButtons(state);
     elements.play.disabled = !buttons.mainPlayable;
-    elements.altEngine.hidden = false;
-    elements.playProjector.disabled = !buttons.projectorPlayable;
+    elements.altEngine.hidden = !buttons.flashBrowserOffered;
+    elements.playFlashBrowser.disabled = !buttons.flashBrowserPlayable;
     return buttons;
 }
 
@@ -245,15 +244,15 @@ function flashBrowserProblem(state) {
         return {
             message:
                 'The FlashBrowser files were changed after installation, so it will not start. ' +
-                'Reinstall the launcher, or play Legacy below.',
+                'Reinstall the launcher to use it; Legacy, the main button, still plays.',
             severity: 'bad'
         };
     }
     if (!browser.found) {
         return {
             message: browser.locked
-                ? 'FlashBrowser is missing from this install. Reinstall the launcher, or play Legacy below.'
-                : 'FlashBrowser is missing. Run `npm run fetch-flash-browser`, or play Legacy below.',
+                ? 'FlashBrowser is missing from this install. Reinstall the launcher to use it; Legacy, the main button, still plays.'
+                : 'FlashBrowser is missing. Run `npm run fetch-flash-browser` to use it; Legacy, the main button, still plays.',
             severity: 'warn'
         };
     }
@@ -264,7 +263,7 @@ function flashBrowserProblem(state) {
 // player out of the game, or how far the sign-in has got.
 function statusLine(state) {
     if (state.gameRunning) {
-        return state.gameEngine === 'projector' ? 'The game is running (Legacy).' : 'The game is running.';
+        return state.gameEngine === 'flashbrowser' ? 'The game is running (FlashBrowser).' : 'The game is running (Legacy).';
     }
     if (state.discord.loginPending && state.discord.loginCodeRequired) {
         return 'Enter the code from your browser.';
@@ -325,10 +324,9 @@ function render(state) {
     elements.relaunch.hidden = true;
     elements.forget.hidden = !state.discord.remembered;
 
+    // Flash Player first: it is the main button. A FlashBrowser fault only comes after it.
     const browserProblem = flashBrowserProblem(state);
-    if (browserProblem) {
-        showProblem(browserProblem.message, browserProblem.severity);
-    } else if (!flash.found) {
+    if (!flash.found) {
         showProblem(
             flash.locked
                 ? 'Flash Player is missing from this install. Reinstall the launcher to play.'
@@ -347,6 +345,8 @@ function render(state) {
                 'Choose the flashplayer_32_sa build for this system.',
             'bad'
         );
+    } else if (browserProblem) {
+        showProblem(browserProblem.message, browserProblem.severity);
     } else if (state.discord && state.discord.loginCodeEnded) {
         showProblem('Too many wrong codes, so that sign-in was cancelled. Sign in with Discord again.', 'bad');
     } else if (state.notice) {
@@ -414,7 +414,7 @@ elements.discordLogin.addEventListener('click', async () => {
 
 async function playWith(engine) {
     elements.play.disabled = true;
-    elements.playProjector.disabled = true;
+    elements.playFlashBrowser.disabled = true;
     const result = await window.launcher.play(engine);
     if (!result || !result.ok) {
         showProblem((result && result.message) || 'Could not start the game.', 'bad');
@@ -428,8 +428,8 @@ elements.play.addEventListener('click', () => {
     void playWith(currentState ? playButtons(currentState).mainEngine : '');
 });
 
-elements.playProjector.addEventListener('click', () => {
-    void playWith('projector');
+elements.playFlashBrowser.addEventListener('click', () => {
+    void playWith('flashbrowser');
 });
 
 elements.forget.addEventListener('click', async () => {

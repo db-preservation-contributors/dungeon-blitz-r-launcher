@@ -349,13 +349,25 @@ function checkLockAndPackaging() {
 
 function checkSavedEngine(scratch) {
     const store = createStateStore(path.join(scratch, 'state'));
-    assert.strictEqual(store.read().engine, '', 'nothing picked yet');
-    store.write({ engine: 'projector' });
-    assert.strictEqual(store.read().engine, 'projector', 'the Flash Player button is remembered');
-    store.write({ engine: 'flashbrowser' });
-    assert.strictEqual(store.read().engine, 'flashbrowser');
-    store.write({ engine: 'something-else' });
-    assert.strictEqual(store.read().engine, '', 'an unknown engine is ignored');
+    assert.strictEqual(store.read().playEngine, '', 'nothing picked yet');
+    store.write({ playEngine: 'projector' });
+    assert.strictEqual(store.read().playEngine, 'projector', 'the Flash Player button is remembered');
+    store.write({ playEngine: 'flashbrowser' });
+    assert.strictEqual(store.read().playEngine, 'flashbrowser');
+    store.write({ serverId: 'official' });
+    assert.strictEqual(store.read().playEngine, 'flashbrowser', 'another write keeps the pick');
+    store.write({ playEngine: 'something-else' });
+    assert.strictEqual(store.read().playEngine, '', 'an unknown engine is ignored');
+
+    // A state file from a launcher whose main button was FlashBrowser: its `engine` is not a
+    // pick of FlashBrowser over Legacy, so it is dropped and Legacy becomes the default.
+    const older = path.join(scratch, 'older-state');
+    fs.mkdirSync(older);
+    fs.writeFileSync(path.join(older, 'launcher-state.json'), JSON.stringify({ serverId: 'official', engine: 'flashbrowser' }));
+    const olderStore = createStateStore(older);
+    assert.strictEqual(olderStore.read().playEngine, '', 'the older key is not carried over');
+    olderStore.write({ serverId: 'official' });
+    assert.ok(!('engine' in JSON.parse(fs.readFileSync(olderStore.path, 'utf8'))), 'the next write drops it');
     console.log('[test-flash-browser] the engine a player picked is remembered: OK');
 }
 
