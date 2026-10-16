@@ -78,6 +78,8 @@ function fakeSpawn(command, args) {
 }
 
 const handlers = new Map();
+// Every URL main.js hands to the browser.
+const openedUrls = [];
 const electron = {
     app: {
         isPackaged: false,
@@ -116,7 +118,11 @@ const electron = {
             handlers.set(channel, handler);
         }
     },
-    shell: { openExternal: async () => {} }
+    shell: {
+        openExternal: async (url) => {
+            openedUrls.push(url);
+        }
+    }
 };
 
 const stubs = {
@@ -222,6 +228,20 @@ async function checkPlaysLegacy() {
     report('[test-legacy-engine] every play starts the standalone Flash Player and drops the saved engine: OK');
 }
 
+/**
+ * A checkout arms no update check, so the update download has nothing to open -- and a URL
+ * the window passes is never opened in its place.
+ */
+async function checkUpdateDownload() {
+    const state = await invoke('launcher:getState');
+    assert.strictEqual(state.update.state, 'disabled', 'a checkout checks for no updates');
+    assert.strictEqual(await invoke('launcher:updateDownload'), false);
+    assert.strictEqual(await invoke('launcher:updateDownload', 'https://evil.example/setup.exe'), false);
+    assert.strictEqual(await invoke('launcher:updateInstall'), false);
+    assert.deepStrictEqual(openedUrls, [], 'nothing was opened in the browser');
+    report('[test-legacy-engine] the update download opens nothing it did not find itself: OK');
+}
+
 async function main() {
     seedState({ chosenEngine: 'ruffle' });
     const consoleLog = console.log;
@@ -230,6 +250,7 @@ async function main() {
     try {
         await checkWithoutFlashPlayer();
         await checkPlaysLegacy();
+        await checkUpdateDownload();
     } finally {
         console.log = consoleLog;
         Module._load = originalLoad;

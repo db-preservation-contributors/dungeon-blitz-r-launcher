@@ -70,12 +70,19 @@
       <button id="browse-flash" type="button" class="ghost">Choose Flash Player...</button>
       <button id="relaunch" type="button" class="ghost" hidden>Restart launcher</button>
       <button id="move-app" type="button" class="ghost" hidden>Move to Applications</button>
-      <button id="update-install" type="button" class="ghost" hidden>Restart to update</button>
     </div>
 
     <!-- What a player cares about: rich presence, lobby chat, the widget profile and the
          version. Faults with Flash Player or the machine go in the problem banner above. -->
     <dl id="engine-status" class="engine-status"></dl>
+
+    <!-- The update's own action, under the Version row: restart into a downloaded update, or
+         download one this build cannot install itself. Not in the repair row, which only
+         shows beside a problem. -->
+    <div id="update-actions" class="tools" hidden>
+      <button id="update-install" type="button" class="ghost" hidden>Restart to update</button>
+      <button id="update-download" type="button" class="ghost" hidden>Download</button>
+    </div>
 
     <div id="tools" class="tools">
       <!-- The damage meter opens in a window of its own, to keep beside the game. -->

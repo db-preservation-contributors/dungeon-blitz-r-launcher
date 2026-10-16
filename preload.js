@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('launcher', {
     relaunch: () => ipcRenderer.invoke('launcher:relaunch'),
     quit: () => ipcRenderer.invoke('launcher:quit'),
     updateInstall: () => ipcRenderer.invoke('launcher:updateInstall'),
+    // Opens the update the main process found; it takes no URL from this side.
+    updateDownload: () => ipcRenderer.invoke('launcher:updateDownload'),
     gameStatsSync: () => ipcRenderer.invoke('launcher:gameStatsSync'),
     damageMeterOpen: () => ipcRenderer.invoke('launcher:damageMeterOpen'),
     onState: (handler) => {

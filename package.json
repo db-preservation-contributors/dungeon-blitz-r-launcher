@@ -13,7 +13,7 @@
     "start": "electron .",
     "fetch-projector": "node tools/fetch-projector.js",
     "build-flash-preload": "node tools/build-flash-preload.js",
-    "test": "node tools/test-presence.js && node tools/test-chat-relay.js && node tools/test-game-stats.js && node tools/test-damage-meter.js && node tools/test-linked-lobby.js && node tools/test-launcher-session-recovery.js && node tools/test-social-bridge.js && node tools/test-discord-ipc.js && node tools/test-launcher-status.js && node tools/test-install-location.js && node tools/test-package-files.js && node tools/test-updater.js && node tools/test-windows-support.js && node tools/test-projector.js && node tools/test-flash-timer.js && node tools/test-legacy-engine.js && node tools/test-discord-login-key.js && node tools/test-flash-preload.js",
+    "test": "node tools/test-presence.js && node tools/test-chat-relay.js && node tools/test-game-stats.js && node tools/test-damage-meter.js && node tools/test-linked-lobby.js && node tools/test-launcher-session-recovery.js && node tools/test-social-bridge.js && node tools/test-discord-ipc.js && node tools/test-launcher-status.js && node tools/test-install-location.js && node tools/test-package-files.js && node tools/test-updater.js && node tools/test-update-notice.js && node tools/test-windows-support.js && node tools/test-projector.js && node tools/test-flash-timer.js && node tools/test-legacy-engine.js && node tools/test-discord-login-key.js && node tools/test-flash-preload.js",
     "make-icons": "node tools/make-icons.js",
     "test-updater": "node tools/test-updater.js",
     "dist": "electron-builder",

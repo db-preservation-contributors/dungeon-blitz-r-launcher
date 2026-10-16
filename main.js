@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { app, BrowserWindow, clipboard, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, net, shell } = require('electron');
 
 const { ChatRelay } = require('./lib/chatRelay');
 const { GameStats } = require('./lib/gameStats');
@@ -28,6 +28,13 @@ const { describeWindows, unsupportedArchitectureMessage, unsupportedWindowsMessa
 const { PresenceBridge } = require('./lib/presence');
 const { SocialBridge } = require('./lib/social');
 const { createUpdateService } = require('./lib/update');
+const {
+    createUpdateNoticeService,
+    openUpdateDownload,
+    readPackageType,
+    resolvePublishTarget,
+    updateRoute
+} = require('./lib/updateNotice');
 const { createSessionCache } = require('./lib/launcherSession');
 const {
     LAUNCHER_ROOT,
@@ -75,7 +82,9 @@ const sessionCache = createSessionCache(path.join(app.getPath('userData'), 'laun
 
 // Auto-update: GitHub releases are the feed (build.publish in package.json points
 // electron-updater at them). Dev checkouts and dev AppImages never self-update, and the
-// service itself is inert unless app.isPackaged.
+// service itself is inert unless app.isPackaged. Builds electron-updater cannot install
+// (macOS, the portable .exe, the ia32 setup) get lib/updateNotice.js instead: the same
+// schedule, and a download link rather than an install.
 let updateService = null;
 
 // Rich presence is served by the launcher itself. The multiplayer server's own bridge
@@ -1211,6 +1220,12 @@ function registerIpc() {
 
     ipcMain.handle('launcher:updateInstall', () => (updateService ? updateService.restartToUpdate() : false));
 
+    // Opens the download the notice service found, in the player's browser. The renderer
+    // names no URL; one it passes anyway must be exactly the service's own, or nothing opens.
+    ipcMain.handle('launcher:updateDownload', (_event, requested) =>
+        openUpdateDownload({ service: updateService, requested, openExternal: (url) => shell.openExternal(url) })
+    );
+
     // The manual retry, for the player who just linked their Discord account and wants the
     // widget filled without opening the game again.
     ipcMain.handle('launcher:gameStatsSync', async () => {
@@ -1322,8 +1337,35 @@ if (instrumentation) {
         console.warn(`[Install] ${installLocation.message} (running from ${installLocation.bundlePath})`);
     }
     // The updater only arms in a packaged build: a checkout updates by git pull, and a dev
-    // AppImage is exactly the kind of install that must not write over itself.
-    if (app.isPackaged) {
+    // AppImage is exactly the kind of install that must not write over itself. Which build
+    // installs and which only gets a notice is lib/updateNotice.js's updateRoute().
+    const route = updateRoute({
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+        arch: process.arch,
+        env: process.env,
+        packageType: app.isPackaged ? readPackageType(process.resourcesPath) : ''
+    });
+    if (route.mode === 'notice') {
+        const feed = resolvePublishTarget({ packageJson: require('./package.json'), resourcesPath: process.resourcesPath });
+        if (feed) {
+            console.log(`[Update] This build cannot install updates (${route.reason}); new releases are announced with a download link.`);
+            updateService = createUpdateNoticeService({
+                // Electron's own stack, so a system proxy applies as it does for electron-updater.
+                fetch: (url, init) => app.whenReady().then(() => net.fetch(url, init)),
+                app,
+                owner: feed.owner,
+                repo: feed.repo,
+                build: route.build,
+                arch: process.arch,
+                log: (message) => console.log(message)
+            });
+            updateService.on('state', () => pushState());
+            updateService.start();
+        } else {
+            console.warn('[Update] No GitHub release feed in build.publish or app-update.yml; not checking for updates.');
+        }
+    } else if (route.mode === 'install') {
         const { autoUpdater } = require('electron-updater');
         autoUpdater.autoDownload = true;
         // The floor: if the player ignores the restart prompt, the update still lands on
