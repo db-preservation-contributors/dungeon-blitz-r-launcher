@@ -189,10 +189,13 @@ bare 60 fps movie in 32.0.0.465, per 180 frames:
 | Timer | Average | Frames over 20 ms | Worst frame |
 | --- | --- | --- | --- |
 | Windows default (15.6 ms) | 60 fps | 15-21 | 33 ms |
-| 1 ms (the launcher's) | 60 fps | 6-9 | 22-24 ms |
+| 1 ms (`DB_FLASH_TIMER=1`) | 60 fps | 6-9 | 22-24 ms |
 
-`DB_FLASH_TIMER=0` on the launcher leaves Flash Player's timer alone. Linux has its own fix
-for the same tick (`native_flash/flash_short_tick.c`).
+This is off unless `DB_FLASH_TIMER=1` is set on the launcher. A thread started in another
+process is what process injection looks like, and antivirus software flags the assembly
+PowerShell compiles for it into `%TEMP%` (Bitdefender blocked it as
+`Gen:Variant.MSILHeracles` on every game start). Linux has its own fix for the same tick
+(`native_flash/flash_short_tick.c`).
 
 What is left is the game's own frame cost: a frame whose work takes longer than 16.7 ms still
 drops below 60. With software rendering the window size decided it: in the same fight Legacy

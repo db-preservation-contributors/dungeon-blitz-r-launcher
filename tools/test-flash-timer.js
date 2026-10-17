@@ -39,23 +39,29 @@ function onlyOn(result) {
 async function checkWhenItRuns() {
     const { calls, spawnImpl } = fakeSpawn('ok: 1 ms');
     for (const platform of ['darwin', 'linux']) {
-        assert.strictEqual(boostFlashTimer(1234, { platform, spawnImpl }).method, 'none', `nothing to do on ${platform}`);
+        assert.strictEqual(boostFlashTimer(1234, { platform, env: { DB_FLASH_TIMER: '1' }, spawnImpl }).method, 'none', `nothing to do on ${platform}`);
     }
-    assert.strictEqual(boostFlashTimer(0, { platform: 'win32', spawnImpl }).method, 'none', 'no process, no request');
-    assert.strictEqual(boostFlashTimer(undefined, { platform: 'win32', spawnImpl }).method, 'none');
+    const on = { DB_FLASH_TIMER: '1' };
+    assert.strictEqual(boostFlashTimer(0, { platform: 'win32', env: on, spawnImpl }).method, 'none', 'no process, no request');
+    assert.strictEqual(boostFlashTimer(undefined, { platform: 'win32', env: on, spawnImpl }).method, 'none');
+    assert.strictEqual(
+        boostFlashTimer(1234, { platform: 'win32', env: {}, spawnImpl }).method,
+        'off',
+        'off by default: antivirus flags the remote thread'
+    );
     assert.strictEqual(
         boostFlashTimer(1234, { platform: 'win32', env: { DB_FLASH_TIMER: '0' }, spawnImpl }).method,
         'off',
         'DB_FLASH_TIMER=0 leaves the timer alone'
     );
     assert.strictEqual(calls.length, 0);
-    console.log('[test-flash-timer] only Windows asks, and DB_FLASH_TIMER=0 turns it off: OK');
+    console.log('[test-flash-timer] only Windows asks, and only with DB_FLASH_TIMER=1: OK');
 }
 
 async function checkTheRequest() {
     const { calls, spawnImpl } = fakeSpawn('ok: 1 ms');
     const results = [];
-    const env = { SystemRoot: 'C:\\Windows' };
+    const env = { SystemRoot: 'C:\\Windows', DB_FLASH_TIMER: '1' };
     const started = boostFlashTimer(4321, { platform: 'win32', env, spawnImpl, onResult: (line) => results.push(line) });
     assert.strictEqual(started.method, 'win32-timebeginperiod');
     await onlyOn();

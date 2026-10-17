@@ -760,7 +760,7 @@ async function launchProjector(serverUrl, settings) {
     const title = keepGameTitle(started.child.pid);
     started.child.once('exit', () => title.stop());
 
-    // A 1 ms Windows timer, so Flash Player holds a steady 60 fps (lib/flashTimer.js).
+    // A 1 ms Windows timer for a steady 60 fps, only with DB_FLASH_TIMER=1 (lib/flashTimer.js).
     boostFlashTimer(started.child.pid, {
         onResult: (result) => console.log(`[Flash] Timer resolution: ${result}`)
     });
