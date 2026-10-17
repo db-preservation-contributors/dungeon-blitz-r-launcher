@@ -1,0 +1,8 @@
+{
+    "name": "dungeon-blitz-r-flashbrowser",
+    "productName": "Dungeon Blitz: R",
+    "version": "1.0.0",
+    "private": true,
+    "description": "The FlashBrowser game window the launcher starts: the game page with the PPAPI Flash plugin, on Electron 11",
+    "main": "main.js"
+}
