@@ -243,6 +243,41 @@ button:focus-visible {
   cursor: not-allowed;
 }
 
+/* FlashBrowser sits under the main button, quieter: Legacy is the way to play, and this is
+   there for players who want the smoother frame rate. */
+.alt-engine {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.db-play-alt {
+  width: min(100%, 300px);
+  min-height: 30px;
+  padding: 6px 16px;
+  border: 1px solid rgba(240, 188, 96, 0.34);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.36);
+  color: rgba(255, 246, 230, 0.84);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.db-play-alt:hover:not(:disabled) {
+  border-color: var(--accent-gold);
+  color: #fff;
+}
+
+.db-play-alt:disabled {
+  border-color: rgba(180, 180, 180, 0.2);
+  color: rgba(255, 255, 255, 0.4);
+  cursor: not-allowed;
+}
+
 .login-code {
   display: flex;
   flex-direction: column;

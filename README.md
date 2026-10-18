@@ -2,7 +2,9 @@
 
 A desktop launcher that plays Dungeon Blitz in Legacy -- Adobe Flash Player 32, the standalone
 player, which ships inside the launcher -- so players do not need a browser that still has
-Flash. It ships for Windows, macOS and Linux.
+Flash. On Windows x64 and macOS it also offers FlashBrowser (the game page with the Flash
+plugin), which runs the game at its own 100 fps for players who want it smoother. It ships for
+Windows, macOS and Linux.
 
 The launcher is a sign-in screen, not a control panel. It asks for one thing — sign in
 with Discord — and once that is done it opens the game and connects to the server. A player who has signed in before is not asked again.
@@ -54,20 +56,102 @@ comfortable with this project, please talk to us. Open an
 The Minesa Studios directly. We will listen, and we will take down or change whatever you
 ask us to without argument. We would much rather work with you than against you.
 
-## The game engine: Legacy, the standalone Flash Player
+## Game engines: Legacy and FlashBrowser
 
-The launcher window has one play button, **Open the game**. It runs the game in Legacy:
-Adobe's standalone Flash Player 32 (`flashplayer_32_sa`, `lib/projector.js`). A remembered
-player's automatic start at launch, and the play that follows a sign-in, start it the same way.
+Legacy is the way to play. FlashBrowser is there for smoothness, on the systems that have it:
 
-Older launchers offered other engines and saved the one a player last picked as
-`chosenEngine` (and before that `engine`) in `launcher-state.json`. Neither key is read any
-more: every play starts Flash Player, and the next write leaves both out of the file.
+| Button | Engine | Where |
+| --- | --- | --- |
+| **Open the game** | Legacy: Adobe's standalone Flash Player 32 (`flashplayer_32_sa`, `lib/projector.js`) | Everywhere; the main button and the default |
+| **Play in FlashBrowser (smoother, 100 FPS)** | FlashBrowser: the game page with FlashBrowser's PPAPI Flash plugin, in a Chromium 87 window (`lib/flashBrowser.js`) | Windows x64 and macOS only |
+
+The game asks for 100 fps. The standalone Flash Player tops out at about 60 however high it
+asks (see [below](#a-steady-60-fps-on-windows)); FlashBrowser runs the plugin with Chromium's
+display pacing off (vsync off), so the game gets its own 100 fps there. That is the only reason
+to pick it. `DB_VSYNC=1` on the launcher turns Chromium's pacing back on, for a display that
+tears without it; the game then runs at the display's rate again.
+
+The launcher remembers the button a player last pressed, as `chosenEngine` in
+`launcher-state.json`: `projector` for the main button, `flashbrowser` for FlashBrowser. A
+remembered player's automatic start at launch, and the play that follows a sign-in, use
+FlashBrowser only if that was the last pick and FlashBrowser can run here; everything else
+plays Legacy. So a player who never pressed the FlashBrowser button always gets Legacy, a saved
+`flashbrowser` falls back to Legacy where FlashBrowser is missing or was changed after
+installation, and any other value an older launcher saved is ignored. The `engine` key even
+older launchers saved is dropped on purpose: it comes from launchers whose main button was
+FlashBrowser, so nearly every player has `flashbrowser` there just from pressing that button.
+
+32-bit Windows and Linux have no FlashBrowser (there is no plugin for them), so there the
+window has the one play button and nothing else. Where FlashBrowser should be but is missing
+or changed, its button is off and the problem banner says why; the main button still plays.
+
+### FlashBrowser
+
+The PPAPI plugin is FlashBrowser's: Flash 32.0.0.363, the last build before Adobe's
+2021-01-12 kill switch. Chromium dropped PPAPI in version 88, and the launcher itself now
+runs on Electron 41, so the plugin cannot be loaded into the launcher's own window the way it
+was up to 1.0.16. FlashBrowser is therefore a separate program the launcher starts for each
+game, just as it starts Flash Player:
+
+```text
+vendor/flashbrowser/<target>/runtime/   Electron 11.5.0 (Chromium 87), exactly as Electron publishes it
+vendor/flashbrowser/<target>/app/       the game-window app, from flashbrowser/
+vendor/flashbrowser/<target>/plugin/    pepflashplayer64.dll | PepperFlashPlayer.plugin, from payload/flash/
+```
+
+```bash
+npm run fetch-flash-browser                                       # this machine
+node tools/fetch-flash-browser.js --platform darwin --arch x64    # another target
+```
+
+`tools/fetch-flash-browser.js` downloads Electron 11 from Electron's releases and checks it
+against the SHA-256 pinned in `flashbrowser.lock.json`. It copies the plugin out of
+`payload/flash/<platform>/` (Git LFS; run `git lfs pull` first) and checks every file of it
+against the lock as well. The game-window app (`flashbrowser/main.js`) runs on Electron 11's
+Node 12. It:
+
+- opens the selected server's game page with the plugin, titled `Dungeon Blitz: R`;
+- keeps the window on the game's origin and sends every other link to the system browser;
+- keeps its own profile (`<user data>/flashbrowser`), never the launcher's;
+- restarts the page's Discord sign-in poll when the in-game sign-in opens the browser;
+- lets the game run at its own 100 fps (`stage.frameRate = 100`): Chromium otherwise paces
+  the plugin to the display, usually 60. `DB_VSYNC=1` on the launcher keeps Chromium's pacing,
+  for a display that tears without it;
+- ignores the system proxy, which VPN programs often set and which then received the game's
+  socket and page instead of the server. `DB_SYSTEM_PROXY=1` uses it again.
+
+When the game port does not answer from the player's network (a firewall or provider that
+only lets web traffic out), the launcher tunnels the game socket through the server's
+WebSocket (`wss://<host>/game-ws`, the web client's socket) before it opens the window
+(`lib/gameTunnel.js`). The server names both on `GET /api/launcher/game-socket`. The launcher
+listens on 127.0.0.1 on the game port, 80 and 443, the window resolves the game host to
+127.0.0.1 (`--db-host-rules`), and only the game port's bytes change route: the page and its
+files are piped to the real server unchanged. A server without the route or without a
+WebSocket, a reachable game port, or a port that cannot be opened here all play direct.
+
+The game page runs its own script there, so rich presence and region latency come from the
+page, as they always did in a browser. `lib/gameHost.js` stays off.
+
+| Target | Ships |
+| --- | --- |
+| `win32-x64` | Windows x64 packages; Windows on Arm runs it under emulation |
+| `darwin-x64` | The macOS package; Apple Silicon runs it under Rosetta |
+| none | 32-bit Windows and Linux: Legacy only |
+
+The `FlashBrowser` workflow assembles it on Windows and macOS whenever the lock file, the
+game-window app, the plugin or the fetch script change. It then starts it exactly as the
+launcher does on a test page that embeds a SWF, and fails unless Flash is actually running
+that movie (`tools/check-flash-browser.js`). A page that merely lists "Shockwave Flash" is no
+proof: Chromium lists it for any plugin path, even one with no file behind it.
+
+`tools/preflight.js` fails a Windows x64 or macOS build that has no FlashBrowser, because
+its FlashBrowser button could never start. Set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1` to
+build one anyway; that package plays Legacy only.
 
 ### The standalone Flash Player
 
-The play button runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`, the
-standalone player Adobe calls the projector. The launcher starts it on the game's SWF,
+The main button, **Legacy**, runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`,
+the standalone player Adobe calls the projector. The launcher starts it on the game's SWF,
 straight from the selected server:
 
 ```
@@ -80,6 +164,11 @@ On Windows it goes through a small loader file instead, for direct rendering (se
 Flash Player runs as its own process, with its own window and renderer. Nothing sits
 between it and the game. The standalone player also has no 2021-01-12 kill switch; the
 browser plugins do.
+
+The PPAPI plugin in FlashBrowser sits behind Chromium's plugin host, compositor and IPC.
+Some players feel that as input and frame delay, most of all when collecting loot. Flash
+Player has none of it, which is why Legacy is the main button and FlashBrowser only the
+smoother option beside it.
 
 #### A steady 60 fps on Windows
 
@@ -217,7 +306,8 @@ node tools/test-flash-preload.js
 
 #### The window title
 
-The game window always reads **Dungeon Blitz: R**, never the game's address. Flash Player
+FlashBrowser's window is the launcher's own app, so it simply keeps that title. In Flash
+Player the game window always reads **Dungeon Blitz: R**, never the game's address. Flash Player
 names its own window, so how that is achieved differs by platform:
 
 | Platform | Flash Player's own title | What the launcher does |
@@ -252,8 +342,8 @@ Sign-in needs nothing from the page:
 
 ### A build without Flash Player
 
-A **packaged** launcher always ships its own Flash Player. One that cannot run it refuses to
-start: it shows an error box naming the path it is running from and quits, rather than
+A **packaged** launcher always ships its own Flash Player. One that can run neither Flash
+Player nor FlashBrowser refuses to start: it shows an error box naming the path it is running from and quits, rather than
 leaving a player on a sign-in screen that leads nowhere. Set
 `DUNGEON_BLITZ_ALLOW_NO_FLASH=1` for a deliberately Flash-less build.
 
@@ -279,13 +369,15 @@ The sign-in screen carries a status strip with four rows, the ones a player care
 
 Hovering a value shows the detail: the local presence endpoint, or the last error.
 
-Machine and engine details are not rows. A missing, changed or unrunnable Flash Player, or a
-Windows that is too old, is said in the problem banner above the strip instead. Flash Player
-is the only engine, so one that cannot run also turns the play button off. Its problem is
-shown after a cancelled sign-in and the answer to a hand-picked Flash Player, and before an
-unreachable server or a launcher run from a disk image. `main.js` prints the Flash Player
-line on the console, and `node tools/test-launcher-status.js` checks every state of the
-strip, the banner and the play button.
+Machine and engine details are not rows. A missing, changed or unrunnable Flash Player or
+FlashBrowser, or a Windows that is too old, is said in the problem banner above the strip
+instead. Flash Player is what the main button runs, so one that cannot run turns that button
+off; its problem is shown after a cancelled sign-in and the answer to a hand-picked Flash
+Player, and before an unreachable server or a launcher run from a disk image. A FlashBrowser
+problem only takes away its own button and says that the main button still plays, so it is
+shown last. `main.js` prints the Flash Player and FlashBrowser lines on the console, and
+`node tools/test-launcher-status.js` checks every state of the strip, the banner and the play
+buttons.
 
 Once an account is known, the sign-in button is replaced by `Signed in as <name>`. That holds
 whether the sign-in happened in the launcher or inside the game, where the SWF's own Discord
@@ -296,7 +388,8 @@ flow lands the player (see [Remembered account](#remembered-account)).
 An **installed** launcher refuses to be repurposed. A development checkout is exempt from
 all of this.
 
-- **Only its own Flash Player.** It runs only the Flash Player it was installed with. It never uses a hand-picked file or a copy found elsewhere on the machine, so the
+- **Only its own Flash Player and FlashBrowser.** It runs only the engines it was installed
+  with. It never uses a hand-picked file or a copy found elsewhere on the machine, so the
   **Choose Flash Player...** button is hidden.
 - **Fingerprint check before every game.** At build time, `tools/fetch-projector.js`
   records a SHA-256 fingerprint of that Flash Player in `lib/projector.integrity.json`. That
@@ -304,6 +397,11 @@ all of this.
   - The check covers every file in the macOS bundle, so an added library counts as a change.
   - A replaced or patched player is refused: the status strip reads
     `changed - reinstall`, and the game does not start.
+  - FlashBrowser is fingerprinted the same way, as one tree: the Electron 11 runtime, the
+    game-window app and the plugin, recorded by `tools/fetch-flash-browser.js` in
+    `lib/flashbrowser.integrity.json`. A changed or added file anywhere in it is refused.
+  - FlashBrowser is started without the launcher's `ELECTRON_*` and `NODE_OPTIONS`
+    variables, and with developer tools off.
 - **No developer tools.** The launcher window has DevTools switched off, and any DevTools
   that open are closed again.
 - **Electron fuses.** The build sets Electron's fuses (`build.electronFuses` in
@@ -322,9 +420,9 @@ all of this.
   switches no fuse controls.
 - **The window stays on its own page.** No page can navigate the launcher window
   elsewhere, open a new window or embed a webview. Links go to the system browser.
-- **CI checks the shipped copy.** The release workflow runs `tools/verify-projector.js` on
-  the copy inside each finished package. A package whose own check would refuse to play
-  therefore cannot be published.
+- **CI checks the shipped copy.** The release workflow runs `tools/verify-projector.js` and
+  `tools/verify-flash-browser.js` on the copies inside each finished package. A package whose own check would
+  refuse to play therefore cannot be published.
 
 **What this cannot stop.** Nothing running on the player's own machine can be made
 impossible to manipulate; these checks raise the cost of doing it. In particular:
@@ -336,7 +434,8 @@ impossible to manipulate; these checks raise the cost of doing it. In particular
 - **Unsigned installers.** Installers are unsigned unless the studio's certificates are
   configured (`CSC_LINK`, `CSC_KEY_PASSWORD`, and Apple notarization). Signing is what makes
   a modified installer show as untrusted to the player.
-- **The game itself.** Flash Player runs the SWF, and memory editors work on any process.
+- **The game itself.** Flash Player or the plugin runs the SWF, and memory editors work on
+  any process.
   What the game accepts is decided by the server: `src/server/core/anticheat` in the game
   repository.
 
@@ -346,6 +445,12 @@ The launcher window runs on Electron 41. It used to be pinned to Electron 11 (Ch
 first because Chromium 87 was the last with the PPAPI Flash host, and later to keep Windows 7
 and 8 running. Electron 11 had stopped getting security fixes, so the launcher moved to a
 supported Electron and gave up Windows 7, 8 and 8.1, which Electron dropped in version 23.
+Those now have a build of their own, the same launcher on Electron 22 (see
+[Windows versions](#windows-versions)).
+
+FlashBrowser still needs the Flash host, so it ships its own Electron 11 as a separate program
+(see [FlashBrowser](#flashbrowser)). Only the game page runs on that old Chromium, in
+its own process and profile; the launcher, its IPC and its sign-in never do.
 
 Discord's consent screen still opens in the player's own browser rather than inside the app,
 because the launcher window loads no remote content. The launcher still sees the result:
@@ -370,11 +475,12 @@ because the launcher window loads no remote content. The launcher still sees the
 
 | Folder | What | In git |
 | --- | --- | --- |
-| `payload/` | The prebuilt Discord Social SDK bridges | Yes, via Git LFS |
+| `payload/` | The prebuilt Discord Social SDK bridges, and FlashBrowser's Flash plugin | Yes, via Git LFS |
 | `vendor/` | Build output — what packaging reads | No, gitignored |
 
 ```text
 vendor/projector/<platform>/  flashplayer_32_sa.exe | Flash Player.app | flashplayer   (tools/fetch-projector.js)
+vendor/flashbrowser/<target>/ runtime/ (Electron 11) + app/ + plugin/                   (tools/fetch-flash-browser.js)
 vendor/social/<platform>/     discord_social_bridge[.exe] + the SDK runtime library   (tools/stage-vendor.js)
 ```
 
@@ -389,7 +495,8 @@ Silicon runs both under Rosetta, and CI builds on the Intel runner. Electron nee
 The Windows targets build `ia32` as well as `x64`, so the releases page carries
 `-win-ia32-setup.exe` and `-win-ia32-portable.exe`. **They play**: `flashplayer_32_sa.exe`
 is itself a 32-bit program in its own process, so it runs on 32-bit and 64-bit Windows
-alike.
+alike. FlashBrowser needs the x64 plugin and an x64 Electron, so the ia32 packages carry none
+and show only the main Legacy button.
 
 Up to 1.0.16, the 32-bit installers opened and then refused to play. The game ran in an
 x86_64 PPAPI plugin loaded *into* the launcher process, and a 32-bit process cannot load
@@ -404,44 +511,62 @@ under "Auto-update", which links the new ia32 installer (or portable .exe).
 
 ### Windows versions
 
-Electron runs on Windows 10 and later only: it dropped Windows 7, 8 and 8.1 in version 23.
-The launcher starts on Windows 10 and Windows 11, 32-bit or 64-bit:
+Electron runs on Windows 10 and later only: it dropped Windows 7, 8 and 8.1 in version 23. So
+every Windows release comes in two builds of the same launcher:
 
-| Windows | Result |
-| --- | --- |
-| Windows 10 and later | supported |
-| Windows 8.1 and older | not supported |
+| Build | Files | Electron | Windows |
+| --- | --- | --- | --- |
+| Main | `...-win-x64-*`, `...-win-ia32-*` | 41 | 10 and 11 |
+| Windows 7 | `...-win7-x64-*`, `...-win7-ia32-*` | 22, the last that runs on Windows 7 | 7, 8, 8.1, 10 and 11 |
 
-On Windows 7 and 8 Electron itself fails to start, usually before any launcher code runs.
-Anything that does get that far is refused by name (`lib/windowsSupport.js`), with a dialog
-that says Windows 10 is needed. Players on those machines can keep an older launcher build
-(1.1.0 or earlier, on Electron 11), but it no longer gets updates.
-`node tools/test-windows-support.js` walks the whole matrix from any machine:
-`os.release()` is a parameter, not a call.
+Both play the current game the same way: same code, same servers, same sign-in, same Legacy
+(Flash Player 32 runs on Windows 7) and, on x64, the same FlashBrowser (its Electron 11 runs on
+Windows 7 too). The Windows 7 build is `build/win7.config.js`: package.json's `build` with
+Electron 22, `win7` in the file names and its own installer check. Vista and XP have no
+Electron at all and are refused by both.
 
-The setup installers refuse Windows 7, 8 and 8.1 too, before they touch anything
-(`build/installer.nsh`, wired in through `build.nsis.include`). That matters for launchers
-already installed there. 1.1.0 still auto-updates (electron-updater 4.3.9, download in the
-background, install on quit), and without the check it would replace itself with a
-launcher that cannot start. Here is what a Windows 7/8 player on 1.1.0 sees once a
-Windows 10-only release is published:
+What the Windows 7 build gives up:
+
+- **Security fixes.** Electron 22 stopped getting them in 2023. The launcher window loads no
+  remote content, but players on Windows 10 or 11 should take the main build.
+- **The game-socket tunnel** (`lib/gameTunnel.js`). Electron 22's Node 16 has no WebSocket, so
+  FlashBrowser always plays direct there; a network that blocks the game port has to use Legacy.
+- **Self-updating.** It gets the update notice instead (see "Auto-update").
+- **Discord lobby chat, maybe.** The Discord Social SDK bridge is the same binary in both builds
+  and has not been tried on Windows 7; Discord itself no longer supports Windows 7. When the
+  bridge cannot start, lobby chat is off and the game plays as usual.
+
+The launcher knows which build it is from its own runtime: an Electron of 22 or older is the
+Windows 7 build (`isLegacyWindowsBuild()` in `lib/windowsSupport.js`), which then takes Windows
+7 as its floor. The main build refuses Windows 7, 8 and 8.1 by name, with a dialog that names
+the exact `win7` setup file to download instead; on those machines Electron 41 usually fails
+before any launcher code runs, so the installer says it too. `node tools/test-windows-support.js`
+walks the whole matrix, for both builds, from any machine: `os.release()` and the Electron
+version are parameters, not calls. The test workflow also runs every suite on Node 16, the
+Windows 7 build's.
+
+The main setup installers refuse Windows 7, 8 and 8.1 before they touch anything
+(`build/installer.nsh`, wired in through `build.nsis.include`); the Windows 7 build's refuse
+only Windows older than 7 (`build/installer-win7.nsh`). That matters for launchers already
+installed there. 1.1.0 still auto-updates (electron-updater 4.3.9, download in the background,
+install on quit) from `latest.yml`, which names the main x64 setup. Without the check it would
+replace itself with a launcher that cannot start. Here is what a Windows 7/8 player on 1.1.0
+sees:
 
 - The status strip shows the download as usual (`downloading 1.x.y - 42%`, then `1.x.y
   ready - restart to install`). 1.1.0 cannot tell that the release will not run there.
-- **Restart to update** closes the launcher and opens the installer, which shows *"Dungeon
-  Blitz R 1.x.y needs Windows 10 or later. Nothing was installed or changed"* and exits. The
-  launcher does not reopen on its own: the player starts 1.1.0 again from the Start menu or
-  the desktop shortcut.
+- **Restart to update** closes the launcher and opens the installer, which says *"Dungeon
+  Blitz R 1.x.y needs Windows 10 or later. Nothing was installed or changed"*, names the
+  `win7-x64` setup for this version and offers to open the releases page.
 - Quitting without clicking runs the same installer silently (`/S`). It exits at once and
-  nothing is shown or changed.
-- Each later start is still 1.1.0. It finds the same release, already downloaded, so it
-  says `ready - restart to install` again, and that stays true for every later release.
-  The prompt is harmless, but 1.1.0 has no setting to hide it.
+  nothing is shown, opened or changed.
+- The `win7` setup has the same appId, so it installs over 1.1.0 in place and keeps its
+  shortcuts and its saved sign-in. From then on that player gets the update notice for `win7`
+  files.
 
-Running a new `-setup.exe` by hand on those systems gives the same dialog. The portable
-`.exe` has no installer and no check, so on Windows 7/8 it just fails to start, like
-Electron does. The release notes also say Windows 10 is needed (`body` in the release
-job), so a player who checks the releases page finds out before downloading.
+The main portable `.exe` has no installer and no check, so on Windows 7/8 it just fails to
+start, like Electron does. The release notes say which files are for which Windows (`body` in
+the release job), so a player who checks the releases page finds out before downloading.
 
 ## Discord rich presence
 
@@ -563,7 +688,8 @@ The meter is DB DPS Launcher's ([db-dpsmod](https://github.com/killssingkurisu/d
 `lib/damageMeter` carries its packet reading, meter and export files unchanged, so a fix there
 can be copied across whole, and the window's page is its in-game overlay on a page of its own.
 
-The launcher never sees the game's traffic -- Flash Player talks to the server itself -- so, as with chat, the game server publishes what the meter needs on a
+The launcher never sees the game's traffic -- FlashBrowser and Flash Player talk to the
+server themselves -- so, as with chat, the game server publishes what the meter needs on a
 feed and the launcher reads it: about twice a second, and only while the meter's window is
 open during a game session, so a player who never opens it costs the server nothing. Nothing
 on the player's machine is read, patched or redirected:
@@ -744,16 +870,19 @@ is where a shared setup belongs, since it is not part of this repository.
 ## Running and packaging
 
 ```bash
-npm install && npm run fetch-projector && npm start
+npm install && npm run fetch-projector && npm run fetch-flash-browser && npm start
 ```
 
 ```bash
 npm run dist:win
+npm run dist:win7     # the Windows 7 build, on Electron 22 (dist:win7:ia32 for 32-bit)
 ```
 
 Each `dist:` script first fetches Flash Player for its platform
-(`tools/fetch-projector.js`). It then runs `tools/preflight.js`, which fails the build when
-that platform has no Flash Player in `vendor/projector/`. For a deliberately Flash-less
+(`tools/fetch-projector.js`) and assembles FlashBrowser where the target has one
+(`tools/fetch-flash-browser.js`; run `git lfs pull` first for the plugin). It then runs
+`tools/preflight.js`, which fails the build when that platform has no Flash Player in
+`vendor/projector/`, or a Windows x64 or macOS target has no FlashBrowser. For a deliberately Flash-less
 package, set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASH=1`.
 
 The application icon comes from one source image, `build/icon.png` (1024×1024 with alpha).
@@ -789,14 +918,15 @@ npm run dist:win -- --dir --config.win.signAndEditExecutable=false
 
 Bumping `version` in `package.json` on `main` is what cuts a release.
 `.github/workflows/release.yml` then builds on three native runners, stages the binaries,
-downloads Flash Player (checked against `projector.lock.json`), runs the preflight (a
-missing Flash Player fails the job), runs electron-builder, checks that Flash Player made it
-into the package intact, and attaches the installers to a draft GitHub release tagged
+downloads Flash Player (checked against `projector.lock.json`), assembles FlashBrowser
+(checked against `flashbrowser.lock.json`), runs the preflight (a missing engine fails the
+job), runs electron-builder, checks that both made it into the package intact, and attaches the installers to a draft GitHub release tagged
 `v<version>`:
 
 | Platform | Files |
 | --- | --- |
 | Windows | `...-win-x64-setup.exe` (64-bit Windows; auto-updates), `...-win-x64-portable.exe`, `...-win-ia32-setup.exe` (32-bit Windows), `...-win-ia32-portable.exe` (all but the x64 setup get an update notice) |
+| Windows 7, 8, 8.1 | `...-win7-x64-setup.exe`, `...-win7-x64-portable.exe`, `...-win7-ia32-setup.exe`, `...-win7-ia32-portable.exe` (Electron 22; update notice) |
 | macOS | `...-mac-x64.dmg`, `...-mac-x64.zip` |
 | Linux | `...-linux-x86_64.AppImage`, `...-linux-amd64.deb` |
 
@@ -834,8 +964,10 @@ that each cost a release to learn:
   finishes last owns it. The ia32 run uses `--publish never` and drops its manifest, so an
   x64 player can never be offered a 32-bit installer.
 
-The two Windows jobs also upload distinct artifact names (`launcher-win32-x64`,
-`launcher-win32-ia32`); sharing one name makes the second upload fail.
+The Windows 7 build (`--config build/win7.config.js`) is the same pair of runs again, also
+with `--publish never` and no manifest. All four Windows jobs upload distinct artifact names
+(`launcher-win32-x64-main`, `launcher-win32-ia32-main`, `launcher-win32-x64-win7`,
+`launcher-win32-ia32-win7`); sharing one name makes the second upload fail.
 
 The `win-ia32` files play; see "32-bit Windows" above.
 
@@ -877,24 +1009,28 @@ Not every build can replace itself, so which one does what is decided at start
 | macOS .dmg / .zip | a notice: Squirrel.Mac only installs over a signed app, and these are unsigned |
 | Windows portable .exe (x64, ia32) | a notice: the updater would install the x64 setup beside it instead |
 | Windows ia32 setup | a notice: `latest.yml` only names the x64 setup, which refuses 32-bit Windows |
+| Windows 7 build (`win7`, setup or portable) | a notice for its own `win7` file: `latest.yml` names the main setup, which refuses Windows 7 |
 
 The notice keeps the same schedule. It asks GitHub's API for the latest published release
 of the repository in `build.publish` (an installed launcher reads it from electron-builder's
 `app-update.yml`, since the packed package.json has no `build`), and when that is newer the
 Version row reads `v1.5.0 - launcher 1.6.0 is available` with a **Download 1.6.0** button.
 The button opens this build's own file in the browser -- the .dmg, or the
-`win-<arch>-portable.exe` / `win-ia32-setup.exe` -- or the release page if that file is
+`win-<arch>-portable.exe` / `win-ia32-setup.exe`, or the Windows 7 build's
+`win7-<arch>-setup.exe` / `-portable.exe` -- or the release page if that file is
 missing; the player installs it over the old copy. Nothing is downloaded by the launcher,
 and an offline moment or a rate limit is only logged and retried at the next check. The
 main process opens only the link the check itself produced, whatever the window asks.
 `tools/test-update-notice.js` pins the routes, the version compare, the file picked for each
-build and the quiet failures against a fake `fetch`.
+build and the quiet failures against a fake `fetch`. The check goes through Electron's own
+network stack (so a system proxy applies): `net.fetch`, or on the Windows 7 build's Electron
+22, which has none, the same GET over `net.request` (`electronFetch()`).
 
 On Windows the update is the NSIS setup installer. electron-updater runs it with
 `--updated --force-run` after **Restart to update** and with `--updated /S` on quit. That
 installer refuses Windows 7, 8 and 8.1 before it uninstalls anything, so a 1.1.0 launcher
-there keeps working. It just keeps offering the update. "Windows versions" above describes
-what that player sees.
+there keeps working, and points that player to the `win7` setup. "Windows versions" above
+describes what that player sees.
 
 ## Servers
 
@@ -923,12 +1059,14 @@ drives the module against a local mock.
 | `tools/test-chat-relay.js` | Own-chat mirroring once, queueing while the lobby is down, inbound printing, unsupported servers |
 | `tools/test-social-bridge.js` | Discord-client and browser authorization paths, lobby join, two-way chat |
 | `tools/test-discord-ipc.js` | The RPC framing, `AUTHORIZE` payload and PING/PONG |
-| `tools/test-launcher-status.js` | Every state of the status strip, the account row and the play button |
+| `tools/test-launcher-status.js` | Every state of the status strip, the account row and the play buttons |
 | `tools/test-damage-meter.js` | The combat feed against a mock server: no feed, no session, the backlog, playback at the pace of play, a new level, game data fetched from the game server only, exports and settings |
 | `tools/test-install-location.js` | Disk-image and Downloads detection, and what is deliberately not flagged |
 | `tools/test-windows-support.js` | Which Windows versions and architectures start, and how the others are refused |
 | `tools/test-projector.js` | Finding Flash Player, the SWF it opens, the pinned downloads, its fingerprint, and the presence and region-latency work done for the game page |
-| `tools/test-legacy-engine.js` | `main.js` itself, with Electron stubbed: every play starts the standalone Flash Player whatever engine an older launcher saved, a missing Flash Player stops the play, and the launcher state names no other engine |
+| `tools/test-legacy-engine.js` | `main.js` itself, with Electron stubbed: Legacy is the default everywhere, FlashBrowser is offered only on Windows x64 and macOS and its button starts it, a saved FlashBrowser pick is honoured when it can run and falls back to Legacy when it cannot, and any other saved engine plays Legacy |
+| `tools/test-flash-browser.js` | Which machines get FlashBrowser, finding it, how it is started, its fingerprint, and that the lock, the plugin payload and packaging agree |
+| `tools/test-game-tunnel.js` | The blocked-game-port tunnel FlashBrowser plays through: asking the server for its game socket, playing direct when the port answers, the socket policy and the game's bytes over the WebSocket, and a port already in use |
 | `tools/test-updater.js` | The electron-updater state machine, the restart gate and the check cadence |
 | `tools/test-update-notice.js` | Which builds self-update and which get a notice, the release feed, the download each build is offered, and quiet failures |
 | `tools/test-discord-login-key.js` | The Discord sign-in's one-time key: only its hash in the browser URL, the key in a header, and a login finished at another address still reaching the launcher |
@@ -936,7 +1074,9 @@ drives the module against a local mock.
 `.github/workflows/tests.yml` runs them on every push and pull request, so a broken Flash
 guard, presence mapping or chat relay fails before an installer is built.
 `.github/workflows/flash-player.yml` downloads and unpacks Flash Player on all three
-platforms whenever the lock file or the fetch script changes.
+platforms whenever the lock file or the fetch script changes, and
+`.github/workflows/flash-browser.yml` assembles FlashBrowser on Windows and macOS and checks
+that Flash really runs a movie in it.
 
 ## Optional: the game repository
 
@@ -948,7 +1088,9 @@ overrides that. Without it the launcher uses its own `social.config.json` and
 
 ## Game window shortcuts
 
-The game window is Flash Player's own, so its shortcuts are Flash Player's:
+In FlashBrowser, `F11` toggles full screen and `F5` (or `Ctrl+R`) reloads the game page.
+
+In Flash Player the window is Flash Player's own, so its shortcuts are Flash Player's:
 `Ctrl+F` (`Cmd+F` on macOS) toggles full screen, `Esc` leaves it, and `Ctrl+Q` (`Cmd+Q`)
 closes the game.
 
@@ -965,6 +1107,11 @@ closes the game.
   sends back. The main process takes commands from that window only. The meter reads the
   combat feed of the player's own game session and the game's data files from the game
   server, and nothing else; it does not touch the game, its files or its traffic.
-- No window of the launcher hosts Flash. The game runs in Adobe's standalone Flash Player, a
-  separate program started on the selected server only, pinned in `projector.lock.json`.
+- No window of the launcher hosts Flash. The game runs in FlashBrowser or in Adobe's
+  standalone Flash Player, each a separate program started on the selected server only. The
+  Electron 11 runtime and the plugin are pinned in `flashbrowser.lock.json`, Flash Player in
+  `projector.lock.json`.
+- FlashBrowser's window runs with `contextIsolation: true`, `nodeIntegration: false`, no
+  webviews and no navigation off the game's origin. It runs on Chromium 87, which gets no
+  security fixes, so it only ever loads the game server's page.
 - URLs are limited to `http`/`https`, and any carrying credentials are rejected.

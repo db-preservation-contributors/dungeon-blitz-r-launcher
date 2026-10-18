@@ -1,0 +1,43 @@
+{
+    "electron": "11.5.0",
+    "flash": "32.0.0.363",
+    "targets": {
+        "win32-x64": {
+            "runtime": {
+                "file": "electron-v11.5.0-win32-x64.zip",
+                "sha256": "bf444cebb0936206f8eacf1cd32a2910eefd3ed945183a5c471f1aa08666ed2b",
+                "urls": [
+                    "https://github.com/electron/electron/releases/download/v11.5.0/electron-v11.5.0-win32-x64.zip",
+                    "https://npmmirror.com/mirrors/electron/11.5.0/electron-v11.5.0-win32-x64.zip"
+                ]
+            },
+            "plugin": {
+                "name": "pepflashplayer64.dll",
+                "payload": "payload/flash/win32/pepflashplayer64.dll",
+                "files": {
+                    "": "4acafedca8bb62529527029aeb485318866e4fd71bf298e73f735bc75f6d720d"
+                }
+            }
+        },
+        "darwin-x64": {
+            "runtime": {
+                "file": "electron-v11.5.0-darwin-x64.zip",
+                "sha256": "32937dca29fc397f0b15dbab720ed3edb88eee24f00f911984b307bf12dc8fd5",
+                "urls": [
+                    "https://github.com/electron/electron/releases/download/v11.5.0/electron-v11.5.0-darwin-x64.zip",
+                    "https://npmmirror.com/mirrors/electron/11.5.0/electron-v11.5.0-darwin-x64.zip"
+                ]
+            },
+            "plugin": {
+                "name": "PepperFlashPlayer.plugin",
+                "payload": "payload/flash/darwin/PepperFlashPlayer.plugin",
+                "files": {
+                    "Contents/CodeResources": "0c612c0eb3f9eb233ec78a8cd635c8c56ecede0d12b98b54b791c6c123965ede",
+                    "Contents/Info.plist": "c159003d7b569efecfa3217eea95a88abd24b44ddfb31dbe40ea07e8b807730a",
+                    "Contents/MacOS/PepperFlashPlayer": "c2e1b9a3ff7922ff3f75706960081a545a3f0e8d12d7fa800be5cd881eb5a444",
+                    "Contents/_CodeSignature/CodeResources": "6686de10a28a2fe11b36cbb86dcbacc827cfc4ea116b4dabf1845e5aee629e9b"
+                }
+            }
+        }
+    }
+}

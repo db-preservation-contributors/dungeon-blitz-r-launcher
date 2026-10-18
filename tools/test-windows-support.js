@@ -16,17 +16,116 @@
 const assert = require('assert');
 
 const {
+    LEGACY_ELECTRON_MAJOR,
     MINIMUM_WINDOWS,
+    MINIMUM_WINDOWS_LEGACY,
     SUPPORTED_ARCHITECTURES,
     describeWindows,
+    isLegacyWindowsBuild,
     unsupportedArchitectureMessage,
     unsupportedWindowsMessage
 } = require('../lib/windowsSupport');
 
 const WIN32 = 'win32';
 
-function describe(release, arch = 'x64') {
-    return describeWindows({ platform: WIN32, release, arch });
+// The main builds' Electron and the Windows 7 build's, passed in so the result does not
+// depend on what (if any) Electron runs the suite.
+const CURRENT_ELECTRON = '41.10.7';
+const LEGACY_ELECTRON = '22.3.27';
+
+function describe(release, arch = 'x64', electron = CURRENT_ELECTRON) {
+    return describeWindows({ platform: WIN32, release, arch, electron });
+}
+
+function testLegacyBuild() {
+    // The Windows 7 build knows itself by its Electron, and only on Windows.
+    assert.strictEqual(LEGACY_ELECTRON_MAJOR, 22);
+    assert.strictEqual(isLegacyWindowsBuild({ platform: WIN32, electron: LEGACY_ELECTRON }), true);
+    assert.strictEqual(isLegacyWindowsBuild({ platform: WIN32, electron: '11.5.0' }), true);
+    assert.strictEqual(isLegacyWindowsBuild({ platform: WIN32, electron: '23.0.0' }), false);
+    assert.strictEqual(isLegacyWindowsBuild({ platform: WIN32, electron: CURRENT_ELECTRON }), false);
+    assert.strictEqual(isLegacyWindowsBuild({ platform: 'linux', electron: LEGACY_ELECTRON }), false);
+    assert.strictEqual(isLegacyWindowsBuild({ platform: WIN32, electron: '' }), false, 'plain Node is not it');
+
+    // It must be the Electron build/win7.config.js packages.
+    const win7Config = require('../build/win7.config.js');
+    assert.strictEqual(Number.parseInt(win7Config.electronVersion, 10), LEGACY_ELECTRON_MAJOR);
+    assert.strictEqual(win7Config.electronVersion, LEGACY_ELECTRON);
+    // Its files must never share a name with the main build's, or the update notice and the
+    // refusal dialogs would point players at the wrong one.
+    assert.ok(win7Config.nsis.artifactName.includes('-win7-${arch}-setup.'), win7Config.nsis.artifactName);
+    assert.ok(win7Config.portable.artifactName.includes('-win7-${arch}-portable.'), win7Config.portable.artifactName);
+    // Everything else is package.json's build.
+    const base = require('../package.json').build;
+    assert.strictEqual(win7Config.appId, base.appId, 'the same appId, so it installs over the main build');
+    assert.deepStrictEqual(win7Config.files, base.files);
+    assert.deepStrictEqual(win7Config.extraResources, base.extraResources);
+
+    // On it, Windows 7, 8 and 8.1 play, on either architecture; Windows 10 and 11 still do.
+    for (const [release, product] of [
+        ['10.0.22631', 'Windows 10 or later'],
+        ['6.3.9600', 'Windows 8.1'],
+        ['6.2.9200', 'Windows 8'],
+        ['6.1.7601', 'Windows 7'],
+        ['6.1.7600', 'Windows 7']
+    ]) {
+        for (const arch of ['x64', 'ia32']) {
+            const status = describe(release, arch, LEGACY_ELECTRON);
+            assert.strictEqual(status.supported, true, `${product} (${release}, ${arch}) plays on the Windows 7 build`);
+            assert.strictEqual(status.legacy, true);
+            assert.strictEqual(status.minimum, MINIMUM_WINDOWS_LEGACY);
+            assert.strictEqual(status.product, product);
+            assert.strictEqual(status.reason, '');
+        }
+    }
+
+    // Vista and XP have no Electron at all.
+    for (const release of ['6.0.6002', '5.1.2600']) {
+        const status = describe(release, 'x64', LEGACY_ELECTRON);
+        assert.strictEqual(status.supported, false, `${release} is refused by the Windows 7 build too`);
+        assert.strictEqual(status.olderBuild, false, 'there is no build to send it to');
+        assert.ok(status.reason.includes(MINIMUM_WINDOWS_LEGACY), status.reason);
+        const message = unsupportedWindowsMessage(status, { version: '1.9.0' });
+        assert.ok(message.includes(`needs ${MINIMUM_WINDOWS_LEGACY} or later`), message);
+        assert.ok(!message.includes('win7'), message);
+    }
+
+    // The main build on Windows 7, 8 and 8.1 sends the player to the Windows 7 build, by its
+    // exact file name; on 32-bit Windows, the ia32 one.
+    for (const [arch, file] of [
+        ['x64', 'DungeonBlitzR-Launcher-1.9.0-win7-x64-setup.exe'],
+        ['ia32', 'DungeonBlitzR-Launcher-1.9.0-win7-ia32-setup.exe']
+    ]) {
+        const status = describe('6.1.7601', arch);
+        assert.strictEqual(status.supported, false);
+        assert.strictEqual(status.olderBuild, true);
+        assert.ok(status.requirements.includes('win7'), status.requirements);
+        const message = unsupportedWindowsMessage(status, { version: '1.9.0' });
+        assert.ok(message.includes(file), message);
+        assert.ok(message.includes(`needs ${MINIMUM_WINDOWS} or later`), message);
+        const expected = win7Config.nsis.artifactName.replace('${version}', '1.9.0').replace('${arch}', arch).replace('${ext}', 'exe');
+        assert.strictEqual(expected, file, 'the dialog quotes the win7 nsis.artifactName');
+    }
+    const devMessage = unsupportedWindowsMessage(describe('6.3.9600'));
+    assert.ok(devMessage.includes('DungeonBlitzR-Launcher-<version>-win7-x64-setup.exe'), devMessage);
+
+    // An arm64 machine on the Windows 7 build is sent to the win7 x64 file.
+    const arm64 = describe('10.0.22631', 'arm64', LEGACY_ELECTRON);
+    assert.strictEqual(arm64.supported, false);
+    assert.ok(
+        unsupportedArchitectureMessage(arm64, { version: '1.9.0' }).includes('DungeonBlitzR-Launcher-1.9.0-win7-x64-setup.exe')
+    );
+
+    // Its installer lets Windows 7 through and refuses only older ones.
+    const fs = require('fs');
+    const path = require('path');
+    const script = fs.readFileSync(path.join(__dirname, '..', win7Config.nsis.include), 'utf8').replace(/^\s*;.*$/gm, '');
+    const customInit = script.match(/!macro\s+customInit\b([\s\S]*?)!macroend/);
+    assert.ok(customInit, `${win7Config.nsis.include} must define customInit`);
+    assert.match(customInit[1], /\$\{IfNot\}\s+\$\{AtLeastWin7\}/);
+    assert.doesNotMatch(customInit[1], /AtLeastWin10/);
+    assert.match(customInit[1], /\bQuit\b/);
+    assert.match(customInit[1], /MessageBox[^\n]*\/SD\s+IDOK/);
 }
 
 function main() {
@@ -143,9 +242,12 @@ function main() {
     assert.ok(devMessage.includes('DungeonBlitzR-Launcher-<version>-win-x64-setup.exe'), devMessage);
     assert.ok(!/DungeonBlitzR-Launcher-\d/.test(devMessage), 'no made-up version in the dev message');
 
+    testLegacyBuild();
+
     console.log('[test-windows-support] Windows 10 and later are supported');
     console.log('[test-windows-support] Windows 8.1, 8, 7, Vista, XP and unreadable versions are refused by name');
     console.log('[test-windows-support] 32-bit and 64-bit builds both play; arm64 is refused by name');
+    console.log('[test-windows-support] the Windows 7 build (Electron 22) plays on Windows 7, 8 and 8.1; the main build names its file');
     console.log('[test-windows-support] all assertions passed');
 }
 

@@ -3,7 +3,8 @@
 
 /**
  * Checks that a build's target platform has the standalone Flash Player
- * (flashplayer_32_sa) in vendor/projector/ before electron-builder runs.
+ * (flashplayer_32_sa) in vendor/projector/, and -- where the target has one -- FlashBrowser
+ * in vendor/flashbrowser/, before electron-builder runs.
  *
  * The projector is the game engine. A package without it runs, but can only play if the
  * player happens to have a Flash Player of their own, and almost nobody does: the packaged
@@ -11,14 +12,20 @@
  * way, so a missing projector fails the build; a deliberate Flash-less package has to say
  * so with DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASH=1.
  *
+ * FlashBrowser is the second, smoother engine on Windows x64 and macOS. A package for one of
+ * them without it still plays Legacy, but its FlashBrowser button could never start, so that
+ * fails the build too; DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1 builds one anyway.
+ *
  * Usage: node tools/preflight.js [--platform win32|darwin|linux] [--arch x64|ia32]
  */
 
+const fs = require('fs');
 const path = require('path');
 
 const { macBundleExecutable, parseBinaryArchitectures } = require('../lib/binary');
 const { canExecute, projectorInDirectory } = require('../lib/projector');
 const { verifyProjector } = require('../lib/integrity');
+const { flashBrowserTarget, inspectFlashBrowser, verifyFlashBrowser } = require('../lib/flashBrowser');
 const { findUnpackagedFiles } = require('../lib/packageFiles');
 
 const LAUNCHER_ROOT = path.resolve(__dirname, '..');
@@ -158,6 +165,53 @@ function checkProjector(platform, arch) {
     return false;
 }
 
+function checkFlashBrowser(platform, arch) {
+    // Each target is checked as built: a 32-bit Windows run and Linux have no FlashBrowser.
+    const builds = (arch ? [arch] : configuredArchitectures(platform)).filter(Boolean);
+    let ok = true;
+    for (const buildArch of builds.length ? builds : ['x64']) {
+        const target = flashBrowserTarget({ platform, arch: buildArch });
+        if (!target || target !== `${platform}-${buildArch}`) {
+            console.log(`[preflight] ${platform}-${buildArch}: no FlashBrowser for this build; it plays in Flash Player only.`);
+            continue;
+        }
+
+        const directory = path.join(LAUNCHER_ROOT, 'vendor', 'flashbrowser', target);
+        const problems = [];
+        if (!fs.existsSync(directory)) {
+            problems.push(`${directory} is missing`);
+        } else {
+            const inspected = inspectFlashBrowser(directory, target);
+            if (inspected.missing.length) {
+                problems.push(`missing ${inspected.missing.join(', ')}`);
+            } else {
+                // The fingerprint an installed launcher checks before every game.
+                const fingerprint = verifyFlashBrowser(directory, { target });
+                if (!fingerprint.ok) {
+                    problems.push(`fingerprint: ${fingerprint.reason}`);
+                }
+            }
+        }
+
+        if (!problems.length) {
+            console.log(`[preflight] ${target}: FlashBrowser ready -> ${directory}`);
+            continue;
+        }
+        if (process.env.DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER === '1') {
+            console.warn(`[preflight] ${target}: FlashBrowser not ready (${problems.join('; ')}) -- building anyway, DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1.`);
+            continue;
+        }
+        console.error('');
+        console.error(`[preflight] ERROR: FlashBrowser for ${target}: ${problems.join('; ')}.`);
+        console.error('[preflight] It is the second engine there: without it the FlashBrowser button cannot start.');
+        console.error(`[preflight] Run \`node tools/fetch-flash-browser.js --platform ${platform} --arch ${buildArch}\` (after \`git lfs pull\`), then rebuild.`);
+        console.error('[preflight] A deliberate FlashBrowser-less package needs DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASHBROWSER=1.');
+        console.error('');
+        ok = false;
+    }
+    return ok;
+}
+
 function main() {
     const argv = process.argv.slice(2);
     const platform = parsePlatform(argv);
@@ -171,7 +225,8 @@ function main() {
     // Both run either way, so fixing one failure does not hide the other.
     const filesOk = checkPackagedFiles();
     const flashOk = checkProjector(platform, arch);
-    if (!filesOk || !flashOk) {
+    const browserOk = checkFlashBrowser(platform, arch);
+    if (!filesOk || !flashOk || !browserOk) {
         process.exit(1);
     }
 }

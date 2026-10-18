@@ -100,8 +100,28 @@ function main() {
     // A bare `--win --ia32` does NOT override `build.win`: the flag says which arches are
     // *requested*, the config still says x64, and the run packages both -- which is what
     // 1.0.14 shipped, universal installer included.
-    const windowsRuns = [...workflow.matchAll(/builder_args:\s*--win\s+([^\n]*)/g)].map((match) => match[1].trim());
-    assert.strictEqual(windowsRuns.length, 2, 'release.yml must have exactly two Windows runs, x64 and ia32');
+    const allWindowsRuns = [...workflow.matchAll(/builder_args:\s*--win\s+([^\n]*)/g)].map((match) => match[1].trim());
+    assert.strictEqual(
+        allWindowsRuns.length,
+        4,
+        'release.yml must have exactly four Windows runs: x64 and ia32, for the main build and the Windows 7 build'
+    );
+    // The Windows 7 build (Electron 22, build/win7.config.js) is the same pair of runs again.
+    const WIN7_CONFIG = '--config build/win7.config.js';
+    const win7Runs = allWindowsRuns.filter((args) => args.includes(WIN7_CONFIG));
+    const windowsRuns = allWindowsRuns.filter((args) => !args.includes(WIN7_CONFIG));
+    assert.strictEqual(win7Runs.length, 2, 'release.yml must build the Windows 7 build for x64 and ia32');
+    assert.deepStrictEqual(
+        win7Runs.map((args) => args.match(/nsis:(\w+)/)[1]).sort(),
+        ['ia32', 'x64'],
+        'the two Windows 7 runs must cover both architectures, one each'
+    );
+    assert.ok(fs.existsSync(path.join(__dirname, '..', 'build', 'win7.config.js')), 'build/win7.config.js is missing');
+    for (const args of win7Runs) {
+        const named = [...args.replace(WIN7_CONFIG, '').matchAll(/\b(?:nsis|portable):(\w+)/g)].map((match) => match[1]);
+        assert.strictEqual(named.length, 2, `a Windows 7 run must name both targets explicitly, got "${args}"`);
+        assert.strictEqual(new Set(named).size, 1, `one run must build exactly one architecture, got "${args}"`);
+    }
 
     for (const args of windowsRuns) {
         // Exactly one architecture, applied to both targets: mixing them would rebuild the
@@ -136,13 +156,14 @@ function main() {
         .map((match) => (match[1] || '').trim());
     for (const name of artifactNames) {
         assert.ok(
-            name.includes('matrix.arch'),
-            `the Windows artifact name must include matrix.arch, or both Windows jobs collide: "${name}"`
+            name.includes('matrix.arch') && name.includes('matrix.flavor'),
+            `the Windows artifact name must include matrix.arch and matrix.flavor, or the Windows jobs collide: "${name}"`
         );
     }
 
     console.log('[test-package-files] every runtime file is covered by build.files');
     console.log('[test-package-files] Windows arches are built one per run, so no universal installer is built');
+    console.log('[test-package-files] the Windows 7 build is built for x64 and ia32 as well');
     console.log('[test-package-files] the setup installer refuses Windows older than 10 before uninstalling anything');
     console.log('[test-package-files] all assertions passed');
 }

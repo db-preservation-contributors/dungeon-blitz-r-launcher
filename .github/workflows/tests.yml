@@ -16,8 +16,14 @@ permissions:
 
 jobs:
   suites:
-    name: Launcher test suites
+    name: Launcher test suites (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 for the main builds' Electron. 16 for the Windows 7 build's: Electron 22 runs the
+        # launcher on Node 16, which has no global fetch, WebSocket or AbortSignal.timeout.
+        node: [22, 16]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,13 +32,21 @@ jobs:
           # prebuilt bridges, so pulling the LFS objects buys nothing here.
           lfs: false
 
-      - name: Set up Node
+      # Always installed with Node 22: Electron 41's install script and electron-builder's
+      # dependencies need Node 18 or later. Only the suites run on the matrix Node.
+      - name: Set up Node 22 to install
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Set up Node ${{ matrix.node }} to run the suites
+        if: matrix.node != 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
 
       # Electron's binary is not needed by the suites: they drive the modules directly.
       - name: Run test suites
