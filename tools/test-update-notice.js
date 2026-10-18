@@ -24,6 +24,7 @@ const {
     USER_AGENT,
     compareVersions,
     createUpdateNoticeService,
+    electronFetch,
     isAllowedDownloadUrl,
     openUpdateDownload,
     pickAsset,
@@ -52,6 +53,10 @@ function release(version, { names, draft = false, prerelease = false } = {}) {
         `DungeonBlitzR-Launcher-${version}-win-x64-portable.exe`,
         `DungeonBlitzR-Launcher-${version}-win-x64-setup.exe`,
         `DungeonBlitzR-Launcher-${version}-win-x64-setup.exe.blockmap`,
+        `DungeonBlitzR-Launcher-${version}-win7-ia32-portable.exe`,
+        `DungeonBlitzR-Launcher-${version}-win7-ia32-setup.exe`,
+        `DungeonBlitzR-Launcher-${version}-win7-x64-portable.exe`,
+        `DungeonBlitzR-Launcher-${version}-win7-x64-setup.exe`,
         'latest-linux.yml',
         'latest-mac.yml',
         'latest.yml'
@@ -124,6 +129,19 @@ function testRoutes() {
     assert.strictEqual(route({ isPackaged: true, platform: 'win32', arch: 'x64', env: {} }), 'install:win-setup');
     // The ia32 setup would be handed the x64 installer, which refuses 32-bit Windows.
     assert.strictEqual(route({ isPackaged: true, platform: 'win32', arch: 'ia32', env: {} }), 'notice:win-setup');
+
+    // The Windows 7 build: latest.yml names the Windows 10 setup, which refuses Windows 7, so
+    // its setup and portable alike, on either architecture, get a notice for win7 files.
+    for (const arch of ['x64', 'ia32']) {
+        assert.strictEqual(
+            route({ isPackaged: true, platform: 'win32', arch, env: {}, legacyWindows: true }),
+            'notice:win7-setup'
+        );
+        assert.strictEqual(
+            route({ isPackaged: true, platform: 'win32', arch, env: portable, legacyWindows: true }),
+            'notice:win7-portable'
+        );
+    }
 
     // Linux: AppImage and deb both install through electron-updater, as before.
     assert.strictEqual(
@@ -230,6 +248,11 @@ function testAssets() {
     assert.strictEqual(name('win-portable', 'x64'), 'DungeonBlitzR-Launcher-1.6.0-win-x64-portable.exe');
     assert.strictEqual(name('win-portable', 'ia32'), 'DungeonBlitzR-Launcher-1.6.0-win-ia32-portable.exe');
     assert.strictEqual(name('win-setup', 'ia32'), 'DungeonBlitzR-Launcher-1.6.0-win-ia32-setup.exe');
+    assert.strictEqual(name('win-setup', 'x64'), 'DungeonBlitzR-Launcher-1.6.0-win-x64-setup.exe', 'never the win7 setup');
+    assert.strictEqual(name('win7-setup', 'x64'), 'DungeonBlitzR-Launcher-1.6.0-win7-x64-setup.exe');
+    assert.strictEqual(name('win7-setup', 'ia32'), 'DungeonBlitzR-Launcher-1.6.0-win7-ia32-setup.exe');
+    assert.strictEqual(name('win7-portable', 'x64'), 'DungeonBlitzR-Launcher-1.6.0-win7-x64-portable.exe');
+    assert.strictEqual(name('win7-portable', 'ia32'), 'DungeonBlitzR-Launcher-1.6.0-win7-ia32-portable.exe');
     assert.strictEqual(name('win-portable', 'arm64'), null);
     assert.strictEqual(pickAsset(null, { build: 'mac', arch: 'x64' }), null);
 
@@ -477,6 +500,87 @@ async function testDownloadIpc() {
     console.log('[test-update-notice] launcher:updateDownload opens only the service URL: OK');
 }
 
+/** A stand-in for Electron 22's `net.request`: the ClientRequest/IncomingMessage events only. */
+function fakeNetRequest(answer) {
+    const { EventEmitter } = require('events');
+    const made = [];
+    const net = {
+        request(options) {
+            const request = new EventEmitter();
+            request.options = options;
+            request.headers = {};
+            request.aborted = false;
+            request.setHeader = (name, value) => {
+                request.headers[name] = value;
+            };
+            request.abort = () => {
+                request.aborted = true;
+            };
+            request.end = () => {
+                if (!answer) {
+                    return;
+                }
+                setImmediate(() => {
+                    const response = new EventEmitter();
+                    response.statusCode = answer.status;
+                    request.emit('response', response);
+                    response.emit('data', Buffer.from(answer.body.slice(0, 3)));
+                    response.emit('data', Buffer.from(answer.body.slice(3)));
+                    response.emit('end');
+                });
+            };
+            made.push(request);
+            return request;
+        }
+    };
+    return { net, made };
+}
+
+async function testElectronFetch() {
+    // A current Electron: its own net.fetch, untouched.
+    const calls = [];
+    const modern = electronFetch({ fetch: (url, init) => (calls.push([url, init]), 'answer') });
+    assert.strictEqual(await modern('https://api.github.com/x', { method: 'GET' }), 'answer');
+    assert.deepStrictEqual(calls, [['https://api.github.com/x', { method: 'GET' }]]);
+
+    // Electron 22 (the Windows 7 build) has no net.fetch: the same GET over net.request.
+    const body = JSON.stringify({ tag_name: 'v1.9.0' });
+    const ok = fakeNetRequest({ status: 200, body });
+    const response = await electronFetch(ok.net)('https://api.github.com/x', {
+        method: 'GET',
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': USER_AGENT },
+        signal: new AbortController().signal
+    });
+    assert.strictEqual(response.ok, true);
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(await response.json(), { tag_name: 'v1.9.0' });
+    assert.strictEqual(ok.made[0].options.method, 'GET');
+    assert.strictEqual(ok.made[0].options.redirect, 'follow');
+    assert.strictEqual(ok.made[0].headers['User-Agent'], USER_AGENT);
+
+    const missing = fakeNetRequest({ status: 404, body: '{}' });
+    const notFound = await electronFetch(missing.net)('https://api.github.com/x');
+    assert.strictEqual(notFound.ok, false);
+    assert.strictEqual(notFound.status, 404);
+
+    // The service's timeout aborts the request and the promise fails.
+    const silent = fakeNetRequest(null);
+    const controller = new AbortController();
+    const pending = electronFetch(silent.net)('https://api.github.com/x', { signal: controller.signal });
+    controller.abort();
+    await assert.rejects(pending, /aborted/);
+    assert.strictEqual(silent.made[0].aborted, true);
+
+    // And the whole notice service runs on it.
+    const release190 = fakeNetRequest({ status: 200, body: JSON.stringify(release('1.9.0')) });
+    const notice = service({ fetch: electronFetch(release190.net), build: 'win7-setup', arch: 'x64', current: '1.8.0' });
+    await notice.checkNow();
+    assert.strictEqual(notice.summary().state, 'available');
+    assert.strictEqual(notice.summary().asset, 'DungeonBlitzR-Launcher-1.9.0-win7-x64-setup.exe');
+
+    console.log('[test-update-notice] the Windows 7 build checks over net.request, which Electron 22 has: OK');
+}
+
 function testConstruction() {
     assert.throws(() => createUpdateNoticeService({ owner: OWNER, repo: REPO }), /needs a fetch/);
     assert.throws(() => createUpdateNoticeService({ fetch: () => {}, owner: '', repo: REPO }), /owner and repo/);
@@ -493,6 +597,7 @@ async function main() {
     await testQuietFailures();
     testCadence();
     await testDownloadIpc();
+    await testElectronFetch();
     testConstruction();
     console.log('[test-update-notice] all assertions passed');
 }

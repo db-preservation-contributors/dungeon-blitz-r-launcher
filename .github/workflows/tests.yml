@@ -16,8 +16,14 @@ permissions:
 
 jobs:
   suites:
-    name: Launcher test suites
+    name: Launcher test suites (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 for the main builds' Electron. 16 for the Windows 7 build's: Electron 22 runs the
+        # launcher on Node 16, which has no global fetch, WebSocket or AbortSignal.timeout.
+        node: [22, 16]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +35,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
 
       - name: Install dependencies
         run: npm ci

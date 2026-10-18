@@ -104,6 +104,22 @@ async function checkDirect() {
     console.log('[test-game-tunnel] a reachable game port is played direct: OK');
 }
 
+async function checkOldRuntime() {
+    // The Windows 7 build runs on Electron 22's Node 16: no global fetch and no WebSocket. It
+    // plays direct, without throwing and without opening anything.
+    const good = { host: 'x', port: 8080, webSocketUrl: 'wss://x/game-ws' };
+    assert.strictEqual(await askGameSocket('http://x/', { fetchImpl: null }), null);
+    assert.strictEqual(await openGameTunnel('http://x/', { fetchImpl: null, WebSocketImpl: undefined, probe: async () => false }), null);
+    assert.strictEqual(
+        await openGameTunnel('http://x/', { fetchImpl: answer(200, good), WebSocketImpl: null, probe: async () => false }),
+        null
+    );
+    // A server that never answers is given up on after the timeout, without AbortSignal.timeout.
+    const hang = (_url, { signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
+    assert.strictEqual(await askGameSocket('http://x/', { fetchImpl: hang, timeoutMs: 20 }), null);
+    console.log('[test-game-tunnel] without fetch or WebSocket (Electron 22, the Windows 7 build) it plays direct: OK');
+}
+
 async function checkTunnel() {
     const gamePort = await freePort();
     const pagePort = await freePort();
@@ -178,6 +194,7 @@ async function checkPortInUse() {
 (async () => {
     await checkAsk();
     await checkDirect();
+    await checkOldRuntime();
     await checkTunnel();
     await checkPortInUse();
 })().catch((error) => {

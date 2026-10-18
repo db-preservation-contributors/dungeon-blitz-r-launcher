@@ -445,6 +445,8 @@ The launcher window runs on Electron 41. It used to be pinned to Electron 11 (Ch
 first because Chromium 87 was the last with the PPAPI Flash host, and later to keep Windows 7
 and 8 running. Electron 11 had stopped getting security fixes, so the launcher moved to a
 supported Electron and gave up Windows 7, 8 and 8.1, which Electron dropped in version 23.
+Those now have a build of their own, the same launcher on Electron 22 (see
+[Windows versions](#windows-versions)).
 
 FlashBrowser still needs the Flash host, so it ships its own Electron 11 as a separate program
 (see [FlashBrowser](#flashbrowser)). Only the game page runs on that old Chromium, in
@@ -509,44 +511,62 @@ under "Auto-update", which links the new ia32 installer (or portable .exe).
 
 ### Windows versions
 
-Electron runs on Windows 10 and later only: it dropped Windows 7, 8 and 8.1 in version 23.
-The launcher starts on Windows 10 and Windows 11, 32-bit or 64-bit:
+Electron runs on Windows 10 and later only: it dropped Windows 7, 8 and 8.1 in version 23. So
+every Windows release comes in two builds of the same launcher:
 
-| Windows | Result |
-| --- | --- |
-| Windows 10 and later | supported |
-| Windows 8.1 and older | not supported |
+| Build | Files | Electron | Windows |
+| --- | --- | --- | --- |
+| Main | `...-win-x64-*`, `...-win-ia32-*` | 41 | 10 and 11 |
+| Windows 7 | `...-win7-x64-*`, `...-win7-ia32-*` | 22, the last that runs on Windows 7 | 7, 8, 8.1, 10 and 11 |
 
-On Windows 7 and 8 Electron itself fails to start, usually before any launcher code runs.
-Anything that does get that far is refused by name (`lib/windowsSupport.js`), with a dialog
-that says Windows 10 is needed. Players on those machines can keep an older launcher build
-(1.1.0 or earlier, on Electron 11), but it no longer gets updates.
-`node tools/test-windows-support.js` walks the whole matrix from any machine:
-`os.release()` is a parameter, not a call.
+Both play the current game the same way: same code, same servers, same sign-in, same Legacy
+(Flash Player 32 runs on Windows 7) and, on x64, the same FlashBrowser (its Electron 11 runs on
+Windows 7 too). The Windows 7 build is `build/win7.config.js`: package.json's `build` with
+Electron 22, `win7` in the file names and its own installer check. Vista and XP have no
+Electron at all and are refused by both.
 
-The setup installers refuse Windows 7, 8 and 8.1 too, before they touch anything
-(`build/installer.nsh`, wired in through `build.nsis.include`). That matters for launchers
-already installed there. 1.1.0 still auto-updates (electron-updater 4.3.9, download in the
-background, install on quit), and without the check it would replace itself with a
-launcher that cannot start. Here is what a Windows 7/8 player on 1.1.0 sees once a
-Windows 10-only release is published:
+What the Windows 7 build gives up:
+
+- **Security fixes.** Electron 22 stopped getting them in 2023. The launcher window loads no
+  remote content, but players on Windows 10 or 11 should take the main build.
+- **The game-socket tunnel** (`lib/gameTunnel.js`). Electron 22's Node 16 has no WebSocket, so
+  FlashBrowser always plays direct there; a network that blocks the game port has to use Legacy.
+- **Self-updating.** It gets the update notice instead (see "Auto-update").
+- **Discord lobby chat, maybe.** The Discord Social SDK bridge is the same binary in both builds
+  and has not been tried on Windows 7; Discord itself no longer supports Windows 7. When the
+  bridge cannot start, lobby chat is off and the game plays as usual.
+
+The launcher knows which build it is from its own runtime: an Electron of 22 or older is the
+Windows 7 build (`isLegacyWindowsBuild()` in `lib/windowsSupport.js`), which then takes Windows
+7 as its floor. The main build refuses Windows 7, 8 and 8.1 by name, with a dialog that names
+the exact `win7` setup file to download instead; on those machines Electron 41 usually fails
+before any launcher code runs, so the installer says it too. `node tools/test-windows-support.js`
+walks the whole matrix, for both builds, from any machine: `os.release()` and the Electron
+version are parameters, not calls. The test workflow also runs every suite on Node 16, the
+Windows 7 build's.
+
+The main setup installers refuse Windows 7, 8 and 8.1 before they touch anything
+(`build/installer.nsh`, wired in through `build.nsis.include`); the Windows 7 build's refuse
+only Windows older than 7 (`build/installer-win7.nsh`). That matters for launchers already
+installed there. 1.1.0 still auto-updates (electron-updater 4.3.9, download in the background,
+install on quit) from `latest.yml`, which names the main x64 setup. Without the check it would
+replace itself with a launcher that cannot start. Here is what a Windows 7/8 player on 1.1.0
+sees:
 
 - The status strip shows the download as usual (`downloading 1.x.y - 42%`, then `1.x.y
   ready - restart to install`). 1.1.0 cannot tell that the release will not run there.
-- **Restart to update** closes the launcher and opens the installer, which shows *"Dungeon
-  Blitz R 1.x.y needs Windows 10 or later. Nothing was installed or changed"* and exits. The
-  launcher does not reopen on its own: the player starts 1.1.0 again from the Start menu or
-  the desktop shortcut.
+- **Restart to update** closes the launcher and opens the installer, which says *"Dungeon
+  Blitz R 1.x.y needs Windows 10 or later. Nothing was installed or changed"*, names the
+  `win7-x64` setup for this version and offers to open the releases page.
 - Quitting without clicking runs the same installer silently (`/S`). It exits at once and
-  nothing is shown or changed.
-- Each later start is still 1.1.0. It finds the same release, already downloaded, so it
-  says `ready - restart to install` again, and that stays true for every later release.
-  The prompt is harmless, but 1.1.0 has no setting to hide it.
+  nothing is shown, opened or changed.
+- The `win7` setup has the same appId, so it installs over 1.1.0 in place and keeps its
+  shortcuts and its saved sign-in. From then on that player gets the update notice for `win7`
+  files.
 
-Running a new `-setup.exe` by hand on those systems gives the same dialog. The portable
-`.exe` has no installer and no check, so on Windows 7/8 it just fails to start, like
-Electron does. The release notes also say Windows 10 is needed (`body` in the release
-job), so a player who checks the releases page finds out before downloading.
+The main portable `.exe` has no installer and no check, so on Windows 7/8 it just fails to
+start, like Electron does. The release notes say which files are for which Windows (`body` in
+the release job), so a player who checks the releases page finds out before downloading.
 
 ## Discord rich presence
 
@@ -855,6 +875,7 @@ npm install && npm run fetch-projector && npm run fetch-flash-browser && npm sta
 
 ```bash
 npm run dist:win
+npm run dist:win7     # the Windows 7 build, on Electron 22 (dist:win7:ia32 for 32-bit)
 ```
 
 Each `dist:` script first fetches Flash Player for its platform
@@ -905,6 +926,7 @@ job), runs electron-builder, checks that both made it into the package intact, a
 | Platform | Files |
 | --- | --- |
 | Windows | `...-win-x64-setup.exe` (64-bit Windows; auto-updates), `...-win-x64-portable.exe`, `...-win-ia32-setup.exe` (32-bit Windows), `...-win-ia32-portable.exe` (all but the x64 setup get an update notice) |
+| Windows 7, 8, 8.1 | `...-win7-x64-setup.exe`, `...-win7-x64-portable.exe`, `...-win7-ia32-setup.exe`, `...-win7-ia32-portable.exe` (Electron 22; update notice) |
 | macOS | `...-mac-x64.dmg`, `...-mac-x64.zip` |
 | Linux | `...-linux-x86_64.AppImage`, `...-linux-amd64.deb` |
 
@@ -942,8 +964,10 @@ that each cost a release to learn:
   finishes last owns it. The ia32 run uses `--publish never` and drops its manifest, so an
   x64 player can never be offered a 32-bit installer.
 
-The two Windows jobs also upload distinct artifact names (`launcher-win32-x64`,
-`launcher-win32-ia32`); sharing one name makes the second upload fail.
+The Windows 7 build (`--config build/win7.config.js`) is the same pair of runs again, also
+with `--publish never` and no manifest. All four Windows jobs upload distinct artifact names
+(`launcher-win32-x64-main`, `launcher-win32-ia32-main`, `launcher-win32-x64-win7`,
+`launcher-win32-ia32-win7`); sharing one name makes the second upload fail.
 
 The `win-ia32` files play; see "32-bit Windows" above.
 
@@ -985,24 +1009,28 @@ Not every build can replace itself, so which one does what is decided at start
 | macOS .dmg / .zip | a notice: Squirrel.Mac only installs over a signed app, and these are unsigned |
 | Windows portable .exe (x64, ia32) | a notice: the updater would install the x64 setup beside it instead |
 | Windows ia32 setup | a notice: `latest.yml` only names the x64 setup, which refuses 32-bit Windows |
+| Windows 7 build (`win7`, setup or portable) | a notice for its own `win7` file: `latest.yml` names the main setup, which refuses Windows 7 |
 
 The notice keeps the same schedule. It asks GitHub's API for the latest published release
 of the repository in `build.publish` (an installed launcher reads it from electron-builder's
 `app-update.yml`, since the packed package.json has no `build`), and when that is newer the
 Version row reads `v1.5.0 - launcher 1.6.0 is available` with a **Download 1.6.0** button.
 The button opens this build's own file in the browser -- the .dmg, or the
-`win-<arch>-portable.exe` / `win-ia32-setup.exe` -- or the release page if that file is
+`win-<arch>-portable.exe` / `win-ia32-setup.exe`, or the Windows 7 build's
+`win7-<arch>-setup.exe` / `-portable.exe` -- or the release page if that file is
 missing; the player installs it over the old copy. Nothing is downloaded by the launcher,
 and an offline moment or a rate limit is only logged and retried at the next check. The
 main process opens only the link the check itself produced, whatever the window asks.
 `tools/test-update-notice.js` pins the routes, the version compare, the file picked for each
-build and the quiet failures against a fake `fetch`.
+build and the quiet failures against a fake `fetch`. The check goes through Electron's own
+network stack (so a system proxy applies): `net.fetch`, or on the Windows 7 build's Electron
+22, which has none, the same GET over `net.request` (`electronFetch()`).
 
 On Windows the update is the NSIS setup installer. electron-updater runs it with
 `--updated --force-run` after **Restart to update** and with `--updated /S` on quit. That
 installer refuses Windows 7, 8 and 8.1 before it uninstalls anything, so a 1.1.0 launcher
-there keeps working. It just keeps offering the update. "Windows versions" above describes
-what that player sees.
+there keeps working, and points that player to the `win7` setup. "Windows versions" above
+describes what that player sees.
 
 ## Servers
 

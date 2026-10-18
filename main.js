@@ -32,6 +32,7 @@ const { SocialBridge } = require('./lib/social');
 const { createUpdateService } = require('./lib/update');
 const {
     createUpdateNoticeService,
+    electronFetch,
     openUpdateDownload,
     readPackageType,
     resolvePublishTarget,
@@ -46,9 +47,10 @@ const {
     normalizeHttpUrl
 } = require('./lib/config');
 
-// Which Windows this is, read once at startup: Electron runs on Windows 10 and later only,
-// and an architecture there is no build of is refused by name. lib/windowsSupport.js holds
-// the rules and is tested without an Electron runtime.
+// Which Windows this is, read once at startup: Electron runs on Windows 10 and later only
+// (Windows 7 and later for the Windows 7 build, on Electron 22), and an architecture there is
+// no build of is refused by name. lib/windowsSupport.js holds the rules and is tested without
+// an Electron runtime.
 const windows = describeWindows();
 
 // One 256px PNG arms the window icon on every platform and the dock icon on Linux and
@@ -397,7 +399,7 @@ function refuseUnsupportedWindows() {
     // know which of the release's files replaces it, and the list is ordered against
     // them: GitHub sorts assets alphabetically and ia32 sorts before x64.
     const message = windows.architectureSupported
-        ? unsupportedWindowsMessage(windows)
+        ? unsupportedWindowsMessage(windows, { version: app.getVersion() })
         : unsupportedArchitectureMessage(windows, { version: app.getVersion() });
 
     dialog.showErrorBox('Dungeon Blitz: R cannot start', message);
@@ -1491,7 +1493,8 @@ if (instrumentation) {
         platform: process.platform,
         arch: process.arch,
         env: process.env,
-        packageType: app.isPackaged ? readPackageType(process.resourcesPath) : ''
+        packageType: app.isPackaged ? readPackageType(process.resourcesPath) : '',
+        legacyWindows: windows.legacy
     });
     if (route.mode === 'notice') {
         const feed = resolvePublishTarget({ packageJson: require('./package.json'), resourcesPath: process.resourcesPath });
@@ -1499,7 +1502,7 @@ if (instrumentation) {
             console.log(`[Update] This build cannot install updates (${route.reason}); new releases are announced with a download link.`);
             updateService = createUpdateNoticeService({
                 // Electron's own stack, so a system proxy applies as it does for electron-updater.
-                fetch: (url, init) => app.whenReady().then(() => net.fetch(url, init)),
+                fetch: (url, init) => app.whenReady().then(() => electronFetch(net)(url, init)),
                 app,
                 owner: feed.owner,
                 repo: feed.repo,

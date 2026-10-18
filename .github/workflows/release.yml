@@ -95,6 +95,25 @@ jobs:
             # The per-target `name:arch` suffix is what pins this run to ia32 alone.
             builder_args: --win nsis:ia32 portable:ia32
             publish_mode: never
+          # The Windows 7 build: the same launcher on Electron 22, the last Electron that runs
+          # on Windows 7, 8 and 8.1 (build/win7.config.js), with `win7` in its file names. One
+          # run per architecture, like the main build, and neither publishes an update
+          # manifest: latest.yml must keep naming the main x64 setup. Installed Windows 7
+          # launchers get the update notice for their own files instead (lib/updateNotice.js).
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            flavor: win7
+            label: Windows 7 x64
+            builder_args: --win nsis:x64 portable:x64 --config build/win7.config.js
+            publish_mode: never
+          - os: windows-latest
+            platform: win32
+            arch: ia32
+            flavor: win7
+            label: Windows 7 ia32
+            builder_args: --win nsis:ia32 portable:ia32 --config build/win7.config.js
+            publish_mode: never
           # An Intel runner: the package is x64 (Apple Silicon runs it, and Flash Player, which
           # is Intel-only, under Rosetta). macos-13 was retired, and a retired label does not
           # fail -- the job simply queues forever.
@@ -200,14 +219,14 @@ jobs:
           # self-updated, so those players update by downloading the new .dmg by hand.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Drop the ia32 update manifest
-        # Only x64 has one, and it must be the only `latest.yml` in the release. Deleting
-        # it here rather than in the upload path keeps this a build-time decision, so the
-        # "List what was built" step below shows what was actually kept.
+      - name: Drop the ia32 and Windows 7 update manifests
+        # Only the main x64 run has one, and it must be the only `latest.yml` in the release.
+        # Deleting it here rather than in the upload path keeps this a build-time decision, so
+        # the "List what was built" step below shows what was actually kept.
         shell: bash
         run: |
-          if [ "${{ matrix.arch }}" = "ia32" ]; then
-            echo "Removing the ia32 run's latest.yml; only x64 ships an update manifest."
+          if [ "${{ matrix.platform }}" = "win32" ] && [ "${{ matrix.publish_mode }}" = "never" ]; then
+            echo "Removing the ${{ matrix.label }} run's latest.yml; only the main x64 run ships an update manifest."
             ls -la dist/latest*.yml || echo "(this run produced no update manifest)"
             rm -f dist/latest.yml dist/latest-ia32.yml
           fi
@@ -299,9 +318,9 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          # Per architecture, not per platform: both Windows jobs produce win32 files, and
-          # two jobs uploading the same artifact name makes the second one fail.
-          name: launcher-${{ matrix.platform }}-${{ matrix.arch || 'default' }}
+          # Per architecture and build, not per platform: all four Windows jobs produce win32
+          # files, and two jobs uploading the same artifact name makes the second one fail.
+          name: launcher-${{ matrix.platform }}-${{ matrix.arch || 'default' }}-${{ matrix.flavor || 'main' }}
           if-no-files-found: error
           path: |
             dist/*.exe
@@ -333,10 +352,12 @@ jobs:
           # is not the default branch's head.
           target_commitish: ${{ github.sha }}
           # Put before the generated notes. Launchers on Windows 7/8 (1.1.0 and earlier) still
-          # download every release, and the setup installer refuses to run there
-          # (build/installer.nsh). This line is for the player who checks the releases page.
+          # download every release, and the main setup installer refuses to run there and
+          # points to the win7 files (build/installer.nsh). This line is for the player who
+          # checks the releases page.
           body: |
-            **Windows:** needs Windows 10 or later. On Windows 7, 8 or 8.1, keep using launcher 1.1.0. The installer will not run there and leaves the installed launcher as it is.
+            **Windows 10 and 11:** take the `win-x64` (or `win-ia32`) files.
+            **Windows 7, 8 and 8.1:** take the `win7-x64` (or `win7-ia32`) files. They are the same launcher on an older Electron, and install over launcher 1.1.0 in place.
           generate_release_notes: true
           # Left as a draft so the unsigned builds get a look before players see them.
           # electron-builder has already uploaded the artifacts and the latest*.yml update
