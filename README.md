@@ -230,7 +230,9 @@ The launcher window has a **Graphics** panel with two choices, both saved in `la
 
 - Flash Player: GPU is direct rendering (auto keeps software off Windows, as before), CPU is
   software rendering. Low and medium quality are set by the loader file (`_quality`) before
-  the game loads. `DB_FLASH_RENDER` still overrides the renderer.
+  the game loads. `DB_FLASH_RENDER` still overrides the renderer. Linux keeps starting on the
+  game's URL: its player fetches the game through the loader but never runs it, so the
+  quality setting does not reach Legacy there.
 - FlashBrowser: CPU starts the game window without a GPU process (`--disable-gpu`), and the
   quality goes onto the page's Flash object as its `quality` param.
 - Picking CPU also turns off the launcher window's own GPU use, after a restart.

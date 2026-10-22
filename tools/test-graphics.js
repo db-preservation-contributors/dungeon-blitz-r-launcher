@@ -87,9 +87,10 @@ try {
     const projector = { path: '/fp', executable: '/fp' };
     const linuxPlain = prepareLaunch(projector, url, { platform: 'linux', workDir, env: {}, render: '', quality: '' });
     assert.deepStrictEqual(linuxPlain.args, [url], 'Linux plays the URL as before');
-    const linuxLow = prepareLaunch(projector, url, { platform: 'linux', workDir, env: {}, render: '', quality: 'LOW' });
-    assert.ok(linuxLow.args[0].startsWith(workDir) && linuxLow.env.VDPAU_DRIVER === 'none', 'Linux uses the loader for quality');
-    assert.ok(fs.readFileSync(linuxLow.args[0]).includes(setQuality));
+    const linuxLow = prepareLaunch(projector, url, { platform: 'linux', workDir, env: {}, render: 'direct', quality: 'LOW' });
+    assert.deepStrictEqual(linuxLow.args, [url], 'Linux never uses the loader: its player does not run the game from one');
+    const macLow = prepareLaunch(projector, url, { platform: 'darwin', workDir, env: {}, render: '', quality: 'LOW' });
+    assert.ok(fs.readFileSync(path.join(workDir, macLow.args[0])).includes(setQuality), 'macOS loader carries the quality');
     const winCpu = prepareLaunch(projector, url, { platform: 'win32', workDir, env: {}, render: '', quality: '' });
     assert.deepStrictEqual(winCpu.args, [url], 'Windows software rendering at full quality plays the URL');
     const winCpuLow = prepareLaunch(projector, url, { platform: 'win32', workDir, env: {}, render: '', quality: 'LOW' });
