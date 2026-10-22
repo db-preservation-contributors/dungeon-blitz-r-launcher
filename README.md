@@ -218,6 +218,25 @@ Single frames of about 60 ms remain at any window size; those are the game's own
 
 The log says `[Flash] Render mode: direct` (or `software`).
 
+#### Graphics settings
+
+The launcher window has a **Graphics** panel with two choices, both saved in `launcher-state.json`
+(`renderer`, `graphicsQuality`) and applied to the next game:
+
+| Setting | Auto | Manual |
+| --- | --- | --- |
+| Renderer | GPU when Chromium's GPU compositing is on and the adapter is not a software one (Microsoft Basic Render Driver, SwiftShader, llvmpipe); CPU otherwise | `gpu`, `cpu` |
+| Quality | From the machine: 2 cores or under 4 GB is `low`, 4 cores or under 8 GB is `medium`, else `high`; capped at `medium` without a GPU | `high`, `medium`, `low` |
+
+- Flash Player: GPU is direct rendering (auto keeps software off Windows, as before), CPU is
+  software rendering. Low and medium quality are set by the loader file (`_quality`) before
+  the game loads. `DB_FLASH_RENDER` still overrides the renderer. Linux keeps starting on the
+  game's URL: its player fetches the game through the loader but never runs it, so the
+  quality setting does not reach Legacy there.
+- FlashBrowser: CPU starts the game window without a GPU process (`--disable-gpu`), and the
+  quality goes onto the page's Flash object as its `quality` param.
+- Picking CPU also turns off the launcher window's own GPU use, after a restart.
+
 | Platform | What ships | Notes |
 | --- | --- | --- |
 | Windows | `flashplayer_32_sa.exe` | 32-bit; runs on 32-bit and 64-bit Windows |

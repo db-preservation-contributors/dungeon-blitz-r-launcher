@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('launcher', {
     updateDownload: () => ipcRenderer.invoke('launcher:updateDownload'),
     gameStatsSync: () => ipcRenderer.invoke('launcher:gameStatsSync'),
     damageMeterOpen: () => ipcRenderer.invoke('launcher:damageMeterOpen'),
+    setGraphics: (settings) => ipcRenderer.invoke('launcher:setGraphics', settings),
     onState: (handler) => {
         const listener = (_event, state) => handler(state);
         ipcRenderer.on('launcher:state', listener);

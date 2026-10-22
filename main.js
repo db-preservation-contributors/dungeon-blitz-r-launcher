@@ -25,6 +25,14 @@ const {
     verifyFlashPreload
 } = require('./lib/projector');
 const { keepGameTitle } = require('./lib/windowTitle');
+const {
+    detectGraphics,
+    flashQuality,
+    normalizeQuality,
+    normalizeRenderer,
+    projectorRenderMode,
+    resolveGraphics
+} = require('./lib/graphics');
 const { boostFlashTimer } = require('./lib/flashTimer');
 const { describeWindows, unsupportedArchitectureMessage, unsupportedWindowsMessage } = require('./lib/windowsSupport');
 const { PresenceBridge } = require('./lib/presence');
@@ -76,7 +84,59 @@ app.setName(APP_DIRECTORY_NAME);
 app.setPath('userData', path.join(app.getPath('appData'), APP_DIRECTORY_NAME));
 
 const state = createStateStore(app.getPath('userData'));
-const social = new SocialBridge({
+
+// A player who picked CPU rendering keeps the launcher's own window off the GPU too.
+if (state.read().renderer === 'cpu' && typeof app.disableHardwareAcceleration === 'function') {
+    app.disableHardwareAcceleration();
+}
+
+let graphicsDetected = null;
+let graphicsDetection = null;
+
+function detectMachineGraphics() {
+    if (!graphicsDetection) {
+        graphicsDetection = (async () => {
+            let featureStatus = null;
+            let gpuInfo = null;
+            try {
+                if (typeof app.getGPUFeatureStatus === 'function') {
+                    featureStatus = app.getGPUFeatureStatus();
+                }
+                if (typeof app.getGPUInfo === 'function') {
+                    gpuInfo = await Promise.race([
+                        app.getGPUInfo('basic'),
+                        new Promise((resolve) => setTimeout(() => resolve(null), 2000))
+                    ]);
+                }
+            } catch (error) {
+                console.log(`[Graphics] GPU detection failed: ${(error && error.message) || error}`);
+            }
+            graphicsDetected = detectGraphics({ featureStatus, gpuInfo });
+            console.log(`[Graphics] Detected: ${graphicsDetected.gpu ? 'GPU' : 'CPU'}, ${graphicsDetected.tier} tier (${graphicsDetected.reason})`);
+            pushState();
+            return graphicsDetected;
+        })();
+    }
+    return graphicsDetection;
+}
+
+function currentGraphics() {
+    return resolveGraphics(state.read(), graphicsDetected);
+}
+
+function graphicsSummary() {
+    const saved = state.read();
+    const resolved = currentGraphics();
+    return {
+        renderer: saved.renderer,
+        quality: saved.graphicsQuality,
+        resolvedRenderer: resolved.renderer,
+        resolvedQuality: resolved.quality,
+        detected: Boolean(graphicsDetected),
+        // CPU picked by hand takes effect on the launcher's own window after a restart.
+        launcherOnGpu: !(typeof app.isHardwareAccelerationEnabled === 'function' && !app.isHardwareAccelerationEnabled())
+    };
+}const social = new SocialBridge({
     tokenCachePath: path.join(app.getPath('userData'), 'discord-social-token.json'),
     // Authorization happens in the player's own Discord client; a browser is only opened
     // when the configuration explicitly asks for that fallback.
@@ -329,8 +389,13 @@ function findFlashPlayer() {
     }
 }
 
+let serverList = null;
+
 function resolveSelectedServer() {
-    const { servers, defaultServerId } = loadServers();
+    if (!serverList) {
+        serverList = loadServers();
+    }
+    const { servers, defaultServerId } = serverList;
     const saved = state.read();
     const selected =
         servers.find((entry) => entry.id === saved.serverId) ||
@@ -553,6 +618,7 @@ function launcherState() {
         chat: chatSummary(),
         gameStats: gameStatsSummary(),
         damageMeter: damageMeterSummary(),
+        graphics: graphicsSummary(),
         install: {
             relocate: Boolean(installLocation.relocate),
             reason: String(installLocation.reason || ''),
@@ -576,10 +642,29 @@ function launcherState() {
     };
 }
 
+// Bursts of bridge events are sent as one state, and an unchanged state is not sent at all.
+let pushScheduled = false;
+let lastPushed = '';
+
 function pushState() {
-    if (launcherWindow && !launcherWindow.isDestroyed()) {
-        launcherWindow.webContents.send('launcher:state', launcherState());
+    if (pushScheduled) {
+        return;
     }
+    pushScheduled = true;
+    setTimeout(() => {
+        pushScheduled = false;
+        if (!launcherWindow || launcherWindow.isDestroyed()) {
+            lastPushed = '';
+            return;
+        }
+        const next = launcherState();
+        const serialized = JSON.stringify(next);
+        if (serialized === lastPushed) {
+            return;
+        }
+        lastPushed = serialized;
+        launcherWindow.webContents.send('launcher:state', next);
+    }, 50);
 }
 
 // The Social SDK runs headless: it puts the player in the Discord lobby, and Discord's
@@ -741,16 +826,24 @@ async function launchProjector(serverUrl, settings) {
     }
 
     const swfUrl = await resolveSwfUrl(serverUrl);
+    const graphics = currentGraphics();
+    const render = projectorRenderMode(graphics, { fallback: flashRenderMode() });
+    const quality = flashQuality(graphics.quality);
     let launch;
     try {
-        launch = prepareLaunch(projector, swfUrl, { workDir: path.join(app.getPath('userData'), 'game'), preload });
+        launch = prepareLaunch(projector, swfUrl, {
+            workDir: path.join(app.getPath('userData'), 'game'),
+            preload,
+            render,
+            quality
+        });
     } catch (error) {
         return { ok: false, message: `Flash Player could not be prepared: ${(error && error.message) || error}` };
     }
     const { command, args, cwd, env } = launch;
-    // Direct (hardware) rendering by default on Windows; DB_FLASH_RENDER=software turns it off.
-    const render = flashRenderMode();
-    console.log(`[Flash] Render mode: ${render || 'software'}${process.env.DB_FLASH_RENDER ? ' (DB_FLASH_RENDER)' : ''}`);
+    console.log(
+        `[Flash] Render mode: ${render || 'software'}${process.env.DB_FLASH_RENDER ? ' (DB_FLASH_RENDER)' : ''}, quality: ${graphics.quality}`
+    );
     console.log(`[Flash] Starting ${command} ${args.join(' ')}${cwd ? ` in ${cwd}` : ''} for ${swfUrl}`);
 
     const started = await spawnGame('projector', 'Flash Player', { command, args, cwd, env });
@@ -793,6 +886,7 @@ async function launchFlashBrowser(serverUrl) {
         }
     }
 
+    const graphics = currentGraphics();
     // A game port the player's network blocks goes through the server's WebSocket instead.
     const tunnel = await openGameTunnel(serverUrl, { log: (message) => console.log(`[Tunnel] ${message}`) });
     const launch = prepareFlashBrowserLaunch(found, {
@@ -800,9 +894,11 @@ async function launchFlashBrowser(serverUrl) {
         // Its own profile: two Chromium versions must never share one.
         userDataDir: path.join(app.getPath('userData'), 'flashbrowser'),
         devTools: !app.isPackaged,
-        hostRules: tunnel ? tunnel.hostRules : ''
+        hostRules: tunnel ? tunnel.hostRules : '',
+        renderer: graphics.renderer,
+        quality: graphics.quality
     });
-    console.log(`[FlashBrowser] Starting ${launch.command} for ${serverUrl}`);
+    console.log(`[FlashBrowser] Starting ${launch.command} for ${serverUrl} (${graphics.renderer}, ${graphics.quality} quality)`);
 
     const started = await spawnGame('flashbrowser', 'FlashBrowser', launch);
     if (!started.ok) {
@@ -917,6 +1013,9 @@ async function play({ engine: requested = '', serverId = '' } = {}) {
         getLauncherToken: () => sessionCache.read().token || ''
     });
 
+    if (!graphicsDetected) {
+        await detectMachineGraphics();
+    }
     const launched =
         engine === 'flashbrowser' ? await launchFlashBrowser(selected.url) : await launchProjector(selected.url, settings);
     if (!launched.ok) {
@@ -1390,6 +1489,17 @@ function registerIpc() {
 
     // The renderer names the button that was pressed -- 'projector' (Legacy, the main button)
     // or 'flashbrowser'; anything else is a plain play of the preferred engine.
+    ipcMain.handle('launcher:setGraphics', (_event, settings) => {
+        const patch = {};
+        if (settings && settings.renderer !== undefined) {
+            patch.renderer = normalizeRenderer(settings.renderer);
+        }
+        if (settings && settings.quality !== undefined) {
+            patch.graphicsQuality = normalizeQuality(settings.quality);
+        }
+        state.write(patch);
+        return launcherState();
+    });
     ipcMain.handle('launcher:play', (_event, engine) => play({ engine: typeof engine === 'string' ? engine : '' }));
     ipcMain.handle('launcher:damageMeterOpen', () => openDamageMeter());
     ipcMain.handle('launcher:quit', () => app.quit());
@@ -1546,6 +1656,7 @@ if (instrumentation) {
 
         createLauncherWindow();
         applyDockIcon();
+        void detectMachineGraphics();
         void refreshServerStatus();
         void warnAboutInstallLocation();
         // Covers a session that outlived the launcher: the account is there to be found

@@ -479,3 +479,44 @@ button:focus-visible {
   letter-spacing: 0.05em;
   line-height: 1.1;
 }
+
+.graphics {
+  width: min(320px, 100%);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.graphics summary {
+  cursor: pointer;
+  text-align: center;
+  font-family: var(--font-ui);
+}
+
+.graphics__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.graphics select {
+  min-width: 140px;
+  padding: 4px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text);
+  font: inherit;
+}
+
+.graphics__note {
+  margin-top: 6px;
+  font-size: 12px;
+  text-align: center;
+}
+
+body.low-graphics .db-hero__grain,
+body.low-graphics .db-hero__vignette {
+  display: none;
+}
