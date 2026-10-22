@@ -91,6 +91,28 @@
       <button id="update-download" type="button" class="ghost" hidden>Download</button>
     </div>
 
+    <details id="graphics" class="graphics">
+      <summary>Graphics</summary>
+      <div class="graphics__row">
+        <label for="graphics-renderer">Renderer</label>
+        <select id="graphics-renderer">
+          <option value="auto">Auto</option>
+          <option value="gpu">GPU</option>
+          <option value="cpu">CPU</option>
+        </select>
+      </div>
+      <div class="graphics__row">
+        <label for="graphics-quality">Quality</label>
+        <select id="graphics-quality">
+          <option value="auto">Auto</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <p id="graphics-note" class="graphics__note"></p>
+    </details>
+
     <div id="tools" class="tools">
       <!-- The damage meter opens in a window of its own, to keep beside the game. -->
       <button id="damage-meter-open" type="button" class="ghost" hidden>Damage meter</button>

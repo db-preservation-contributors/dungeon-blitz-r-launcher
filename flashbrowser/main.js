@@ -24,6 +24,8 @@
  *   --db-system-proxy          send the window's traffic through the system proxy
  *   --db-host-rules=<rules>    Chromium host-resolver-rules, set while the game socket is
  *                              tunnelled (lib/gameTunnel.js)
+ *   --db-cpu-render            render on the CPU (no GPU process, software compositing)
+ *   --db-quality=<q>           Flash quality for the game: low or medium (default: the page's)
  */
 
 const fs = require('fs');
@@ -90,6 +92,14 @@ if (!process.argv.includes('--db-vsync')) {
 if (!process.argv.includes('--db-system-proxy')) {
     app.commandLine.appendSwitch('no-proxy-server');
 }
+
+if (process.argv.includes('--db-cpu-render')) {
+    app.disableHardwareAcceleration();
+    app.commandLine.appendSwitch('disable-gpu');
+    app.commandLine.appendSwitch('disable-gpu-compositing');
+}
+
+const quality = ['low', 'medium'].includes(option('quality')) ? option('quality') : '';
 
 const hostRules = option('host-rules');
 if (hostRules) {
@@ -175,6 +185,8 @@ function createGameWindow() {
         show: false,
         icon: fs.existsSync(ICON_PATH) ? ICON_PATH : undefined,
         webPreferences: {
+            preload: quality ? path.join(__dirname, 'preload.js') : undefined,
+            additionalArguments: quality ? [`--db-quality=${quality}`] : [],
             plugins: true,
             contextIsolation: true,
             nodeIntegration: false,

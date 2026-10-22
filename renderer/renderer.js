@@ -27,8 +27,45 @@ const elements = {
     damageMeterOpen: document.getElementById('damage-meter-open'),
     tools: document.getElementById('tools'),
     quit: document.getElementById('quit'),
-    engineStatus: document.getElementById('engine-status')
+    engineStatus: document.getElementById('engine-status'),
+    graphicsRenderer: document.getElementById('graphics-renderer'),
+    graphicsQuality: document.getElementById('graphics-quality'),
+    graphicsNote: document.getElementById('graphics-note')
 };
+
+const LABELS = { gpu: 'GPU', cpu: 'CPU', high: 'High', medium: 'Medium', low: 'Low' };
+
+function renderGraphics(graphics) {
+    if (!graphics) {
+        return;
+    }
+    elements.graphicsRenderer.value = graphics.renderer;
+    elements.graphicsQuality.value = graphics.quality;
+    elements.graphicsRenderer.options[0].textContent = `Auto (${LABELS[graphics.resolvedRenderer]})`;
+    elements.graphicsQuality.options[0].textContent = `Auto (${LABELS[graphics.resolvedQuality]})`;
+    const restart = graphics.renderer === 'cpu' && graphics.launcherOnGpu;
+    elements.graphicsNote.textContent = restart
+        ? 'Applies to the next game. The launcher window switches to CPU after a restart.'
+        : 'Applies to the next game.';
+    document.body.classList.toggle('low-graphics', graphics.resolvedQuality === 'low');
+}
+
+async function saveGraphics() {
+    const next = await window.launcher.setGraphics({
+        renderer: elements.graphicsRenderer.value,
+        quality: elements.graphicsQuality.value
+    });
+    if (next) {
+        render(next);
+    }
+}
+
+elements.graphicsRenderer.addEventListener('change', () => {
+    void saveGraphics();
+});
+elements.graphicsQuality.addEventListener('change', () => {
+    void saveGraphics();
+});
 
 /**
  * The rows under the problem banner, kept to what a player cares about: whether Discord
@@ -402,6 +439,7 @@ function render(state) {
     elements.tools.hidden = elements.damageMeterOpen.hidden && elements.gameStatsSync.hidden;
 
     renderEngineStatus(state);
+    renderGraphics(state.graphics);
     elements.versions.textContent = `v${state.appVersion}`;
 }
 
