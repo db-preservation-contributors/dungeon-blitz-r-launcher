@@ -345,6 +345,14 @@ AIR_SDK_HOME=/path/to/AIRSDK npm run build-air   # -> vendor/air/<platform>/
 ADT signs the bundle with `DB_AIR_CERT` / `DB_AIR_CERT_PASS`, or a self-signed certificate it makes
 once in `build/air/`.
 
+Releases build it on the Windows x64 and macOS runners: `tools/fetch-air-sdk.js` downloads the SDK
+pinned in `air-sdk.lock.json` (version and SHA-256 per platform) into `build/air-sdk/<platform>/`,
+then `build-air` packages it. The ia32, Windows 7 and Linux installers ship without it.
+
+```bash
+AIR_SDK_HOME=$(node tools/fetch-air-sdk.js | tail -1) npm run build-air
+```
+
 ## Tamper resistance
 
 An **installed** launcher refuses to be repurposed. A development checkout is exempt from

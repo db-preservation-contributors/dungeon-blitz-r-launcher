@@ -80,6 +80,7 @@ jobs:
             platform: win32
             arch: x64
             label: Windows x64
+            air: true
             # `nsis:x64` / `portable:x64` rather than the --x64 flag: the flag only decides
             # which arches are requested, and `build.win` still lists x64, so asking for ia32
             # produced BOTH (plus the universal) instead of replacing it.
@@ -120,6 +121,7 @@ jobs:
           - os: macos-15-intel
             platform: darwin
             label: macOS
+            air: true
             builder_args: --mac
             publish_mode: always
           # Linux is allowed to fail so that one platform cannot stop the Windows and macOS
@@ -183,6 +185,24 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Set up Java for the AIR SDK
+        if: matrix.air
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build the AIR engine
+        if: matrix.air
+        shell: bash
+        # HARMAN's AIR SDK, pinned in air-sdk.lock.json, packages air/ as a captive-runtime bundle
+        # into vendor/air/<platform>/ and fingerprints it into lib/air.integrity.json. Only the
+        # x64 Windows and macOS builds carry it: the bundle is 64-bit, and the Linux runtime is
+        # limited to commercially licensed developers. Builds without it show AIR as unavailable.
+        run: |
+          sdk=$(node tools/fetch-air-sdk.js --platform ${{ matrix.platform }} | tail -1)
+          AIR_SDK_HOME="$sdk" node tools/build-air.js
 
       - name: Check Flash Player
         shell: bash
@@ -253,6 +273,17 @@ jobs:
               node tools/build-flash-preload.js --check "$preload"
               ;;
           esac
+
+      - name: Check the AIR engine made it into the package
+        if: matrix.air
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+            darwin) bundle=$(find dist -maxdepth 8 -path '*.app/Contents/Resources/vendor/air/darwin/DungeonBlitzR.app' | head -1) ;;
+            win32) bundle=$(find dist -type d -path '*unpacked*/resources/vendor/air/win32/DungeonBlitzR' | head -1) ;;
+          esac
+          test -n "$bundle" || { echo "the AIR engine is missing from the package"; exit 1; }
+          node tools/build-air.js --check "$bundle"
 
       - name: Start the packaged launcher
         if: matrix.platform != 'linux'

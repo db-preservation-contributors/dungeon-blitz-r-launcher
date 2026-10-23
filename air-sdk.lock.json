@@ -1,0 +1,16 @@
+{
+    "version": "51.4.1.2",
+    "site": "https://airsdk.wxlift.com",
+    "win32": {
+        "file": "AIRSDK_Windows.zip",
+        "sha256": "8476c4c93b70dc88d3a07e43bfa98074c990a43fcbe8729d1449b88bed953f5b"
+    },
+    "darwin": {
+        "file": "AIRSDK_MacOS.zip",
+        "sha256": "e2816427b8e3c77240bc4d413f80330c9d7436b057458125c57bc659a71a5c25"
+    },
+    "linux": {
+        "file": "AIRSDK_Linux.zip",
+        "sha256": "c12e15338089926b312d174a7adf6619f70b3c51da678244e29515365f971b27"
+    }
+}
