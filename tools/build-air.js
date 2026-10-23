@@ -49,7 +49,10 @@ function tool(sdk, name) {
 
 function run(command, args) {
     console.log(`[build-air] ${path.basename(command)} ${args.join(' ')}`);
-    execFileSync(command, args, { stdio: 'inherit', shell: process.platform === 'win32' && command.endsWith('.bat') });
+    const shell = process.platform === 'win32' && command.endsWith('.bat');
+    // A .bat runs through cmd.exe, which splits unquoted arguments on spaces.
+    const passed = shell ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
+    execFileSync(command, passed, { stdio: 'inherit', shell });
 }
 
 /** The newest app descriptor namespace the SDK knows: amxmlc writes that SWF version, and ADT refuses an older namespace. */
