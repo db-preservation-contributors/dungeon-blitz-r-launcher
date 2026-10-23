@@ -108,6 +108,7 @@ jobs:
             label: Windows 7 x64
             builder_args: --win nsis:x64 portable:x64 --config build/win7.config.js
             publish_mode: never
+            allow_fail: true
           - os: windows-latest
             platform: win32
             arch: ia32
@@ -115,6 +116,7 @@ jobs:
             label: Windows 7 ia32
             builder_args: --win nsis:ia32 portable:ia32 --config build/win7.config.js
             publish_mode: never
+            allow_fail: true
           # An Intel runner: the package is x64 (Apple Silicon runs it, and Flash Player, which
           # is Intel-only, under Rosetta). macos-13 was retired, and a retired label does not
           # fail -- the job simply queues forever.
@@ -124,7 +126,8 @@ jobs:
             air: true
             builder_args: --mac
             publish_mode: always
-          # Linux is allowed to fail so that one platform cannot stop the Windows and macOS
+          # Linux and the Windows 7 builds (Electron 22's GPU process crashes on the hosted
+          # runners) are allowed to fail so that one platform cannot stop the Windows and macOS
           # installers from publishing; a failure is still visible on the run page.
           - os: ubuntu-22.04
             platform: linux
