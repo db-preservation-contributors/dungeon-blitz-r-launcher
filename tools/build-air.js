@@ -52,8 +52,26 @@ function run(command, args) {
     execFileSync(command, args, { stdio: 'inherit', shell: process.platform === 'win32' && command.endsWith('.bat') });
 }
 
-function descriptor(version) {
-    const source = fs.readFileSync(path.join(AIR_ROOT, 'DungeonBlitzAir-app.xml'), 'utf8');
+/** The newest app descriptor namespace the SDK knows: amxmlc writes that SWF version, and ADT refuses an older namespace. */
+function sdkNamespace(sdk) {
+    try {
+        const xml = fs.readFileSync(path.join(sdk, 'airsdk.xml'), 'utf8');
+        const versions = [...xml.matchAll(/http:\/\/ns\.adobe\.com\/air\/application\/([0-9.]+)/g)].map((match) => match[1]);
+        versions.sort((a, b) => {
+            const [x, y] = [a.split('.').map(Number), b.split('.').map(Number)];
+            return x[0] - y[0] || (x[1] || 0) - (y[1] || 0);
+        });
+        return versions.length ? `http://ns.adobe.com/air/application/${versions[versions.length - 1]}` : '';
+    } catch {
+        return '';
+    }
+}
+
+function descriptor(version, namespace = '') {
+    let source = fs.readFileSync(path.join(AIR_ROOT, 'DungeonBlitzAir-app.xml'), 'utf8');
+    if (namespace) {
+        source = source.replace(/xmlns="http:\/\/ns\.adobe\.com\/air\/application\/[0-9.]+"/, `xmlns="${namespace}"`);
+    }
     const numeric = String(version).replace(/[^0-9.].*$/, '') || '0.0.0';
     return source.replace(/<versionNumber>[^<]*<\/versionNumber>/, `<versionNumber>${numeric}</versionNumber>`);
 }
@@ -81,6 +99,9 @@ function main() {
         console.log(`[build-air] ${args.check} matches its fingerprint`);
         return;
     }
+    if (process.platform === 'linux') {
+        throw new Error('HARMAN\'s Linux AIR runtime is limited to commercially licensed developers; build on Windows or macOS');
+    }
     if (!args.sdk) {
         throw new Error('set AIR_SDK_HOME (or pass --sdk) to HARMAN\'s AIR SDK');
     }
@@ -103,7 +124,7 @@ function main() {
         fs.copyFileSync(path.join(AIR_ROOT, 'icons', icon), path.join(stage, 'icons', icon));
     }
     const descriptorPath = path.join(WORK_DIR, 'DungeonBlitzAir-app.xml');
-    fs.writeFileSync(descriptorPath, descriptor(version));
+    fs.writeFileSync(descriptorPath, descriptor(version, sdkNamespace(args.sdk)));
 
     const target = path.join(VENDOR_ROOT, process.platform);
     const bundle = path.join(target, process.platform === 'darwin' ? `${BUNDLE_NAME}.app` : BUNDLE_NAME);

@@ -3,27 +3,23 @@
 
 /**
  * Which engine a play starts: Legacy -- Adobe's standalone Flash Player 32 (lib/projector.js) --
- * is the main button and the default; FlashBrowser (lib/flashBrowser.js), the smoother one, is a
- * second button where this system has one.
+ * is the main button and the default; AIR (lib/airEngine.js) is a second button where the build
+ * carries its bundle.
  *
  * main.js itself runs here, with a stand-in for Electron and for the parts that would start
- * real programs (the Flash Player lookup and launch, the window title, the timer, the game
- * host, the game tunnel), and is driven through the same IPC calls the launcher window makes.
- * FlashBrowser is looked up by the real lib/flashBrowser.js, told which platform it is on and
- * pointed at a stand-in vendor/flashbrowser/ folder; main.js is loaded once per machine, since
- * it looks for its engines when it starts. It checks that:
+ * real programs (the Flash Player and AIR lookup and launch, the window title, the timer, the
+ * game host), and is driven through the same IPC calls the launcher window makes. main.js is
+ * loaded once per setup, since it looks for its engines when it starts. It checks that:
  *
- * - FlashBrowser is offered on Windows x64 and macOS (Intel, and Apple Silicon under Rosetta),
- *   and not on 32-bit Windows or Linux;
  * - a plain play -- the start-up play of a remembered player -- starts Legacy unless the player
- *   last picked FlashBrowser with its button and it can run here;
- * - the main button starts Legacy and the FlashBrowser button starts FlashBrowser, each
- *   remembered as `chosenEngine` for the next plain play;
- * - a saved 'flashbrowser' falls back to Legacy where FlashBrowser is missing or not offered,
- *   and the FlashBrowser button there says why instead of starting anything;
- * - a saved 'ruffle', an unknown value or the older `engine` key all play Legacy;
- * - FlashBrowser runs at the game's own 100 fps unless DB_VSYNC=1;
- * - nothing anywhere in the launcher's code or state is Ruffle.
+ *   last picked AIR with its button and it can run here;
+ * - the main button starts Legacy and the AIR button starts AIR, each remembered as
+ *   `chosenEngine` for the next plain play;
+ * - a saved 'air' falls back to Legacy where the build has no AIR engine, and the AIR button
+ *   there says why instead of starting anything;
+ * - a saved 'flashbrowser' (FlashBrowser is gone), 'ruffle', an unknown value or the older
+ *   `engine` key all play Legacy;
+ * - nothing anywhere in the launcher's code or state is Ruffle or FlashBrowser.
  *
  * Usage: node tools/test-legacy-engine.js
  */
@@ -43,7 +39,7 @@ const SWF_URL = 'http://dungeonblitzr.theminesa.studio/p/cbp/DungeonBlitz.swf';
 const GAME_URL = 'http://dungeonblitzr.theminesa.studio/';
 
 // Values older launchers wrote into launcher-state.json that name no engine this one has.
-const UNKNOWN_ENGINES = ['ruffle', 'something-else', ''];
+const UNKNOWN_ENGINES = ['flashbrowser', 'ruffle', 'something-else', ''];
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'db-legacy-engine-'));
 const appData = path.join(scratch, 'appData');
@@ -55,7 +51,6 @@ process.env.DUNGEON_BLITZ_SERVER_ROOT = path.join(scratch, 'no-server-checkout')
 // Nothing that would reach a server or Discord while the fake game runs.
 process.env.DUNGEON_BLITZ_GAME_STATS = '0';
 process.env.DUNGEON_BLITZ_DAMAGE_METER = '0';
-delete process.env.DB_VSYNC;
 
 /** Writes launcher-state.json as an older launcher, or an earlier play, would have left it. */
 function seedState(extra = {}) {
@@ -86,30 +81,9 @@ function write(file, body = 'x') {
     fs.writeFileSync(file, body);
 }
 
-/** A vendor/flashbrowser/<target>/ stand-in: complete, or without its plugin. */
-function makeFlashBrowser(target, { complete }) {
-    const root = path.join(scratch, 'flashbrowser', `${target}-${complete ? 'complete' : 'partial'}`);
-    if (target === 'win32-x64') {
-        write(path.join(root, 'runtime', 'electron.exe'));
-        write(path.join(root, 'runtime', 'resources', 'default_app.asar'));
-        if (complete) {
-            write(path.join(root, 'plugin', 'pepflashplayer64.dll'));
-        }
-    } else {
-        write(path.join(root, 'runtime', 'Electron.app', 'Contents', 'MacOS', 'Electron'));
-        write(path.join(root, 'runtime', 'Electron.app', 'Contents', 'Resources', 'default_app.asar'));
-        if (complete) {
-            write(path.join(root, 'plugin', 'PepperFlashPlayer.plugin', 'Contents', 'MacOS', 'PepperFlashPlayer'));
-        }
-    }
-    write(path.join(root, 'app', 'main.js'));
-    write(path.join(root, 'app', 'package.json'), '{}');
-    return root;
-}
-
-// The machine main.js believes it is on, for the FlashBrowser lookup: its platform and
-// architecture, and the vendor/flashbrowser/ folders it would search.
-let machine = { platform: 'linux', arch: 'x64', directories: [] };
+// The AIR bundle the build carries: null (none), or a stand-in.
+const FAKE_AIR = { path: path.join(scratch, 'DungeonBlitzR'), executable: path.join(scratch, 'DungeonBlitzR', 'DungeonBlitzR.exe') };
+let machine = { air: null };
 
 // Every program main.js starts.
 const spawned = [];
@@ -169,7 +143,7 @@ const electron = {
     }
 };
 
-const realFlashBrowser = require('../lib/flashBrowser');
+const realAir = require('../lib/airEngine');
 const stubs = {
     electron,
     child_process: { ...require('child_process'), spawn: fakeSpawn },
@@ -183,13 +157,11 @@ const stubs = {
         resolveSwfUrl: async (serverUrl) => new URL('/p/cbp/DungeonBlitz.swf', serverUrl).toString(),
         verifyFlashPreload: () => ({ ok: true, reason: '' })
     },
-    // The real lookup and launch, on the machine the test says this is.
-    './lib/flashBrowser': {
-        ...realFlashBrowser,
-        findFlashBrowser: () => realFlashBrowser.findFlashBrowser(machine)
+    // The real launch, on the bundle the test says this build carries.
+    './lib/airEngine': {
+        ...realAir,
+        findAirApp: () => (machine.air ? { ...machine.air } : null)
     },
-    // The game port always answers here: no tunnel.
-    './lib/gameTunnel': { openGameTunnel: async () => null },
     './lib/windowTitle': { keepGameTitle: () => ({ method: 'none', stop() {} }) },
     './lib/flashTimer': { boostFlashTimer() {} },
     './lib/gameHost': {
@@ -225,15 +197,15 @@ async function invoke(channel, ...args) {
     return handler({}, ...args);
 }
 
-/** The launcher state names Flash Player, FlashBrowser as `expected`, and no Ruffle. */
+/** The launcher state names Flash Player, AIR as `expected`, and no Ruffle or FlashBrowser. */
 function checkState(state, expected) {
     assert.ok(state.flash && typeof state.flash === 'object', 'the state reports Flash Player');
-    assert.ok(state.flashBrowser && typeof state.flashBrowser === 'object', 'and FlashBrowser');
+    assert.ok(state.air && typeof state.air === 'object', 'and AIR');
     for (const [key, value] of Object.entries(expected)) {
-        assert.strictEqual(state.flashBrowser[key], value, `flashBrowser.${key}`);
+        assert.strictEqual(state.air[key], value, `air.${key}`);
     }
-    assert.ok(['projector', 'flashbrowser'].includes(state.engine), `the preferred engine is one this launcher has (${state.engine})`);
-    assert.ok(!/ruffle/i.test(JSON.stringify(state)), 'Ruffle appears nowhere in the state');
+    assert.ok(['projector', 'air'].includes(state.engine), `the preferred engine is one this launcher has (${state.engine})`);
+    assert.ok(!/ruffle|flashbrowser/i.test(JSON.stringify(state)), 'Ruffle and FlashBrowser appear nowhere in the state');
 }
 
 /** Presses a play button (or makes a plain play, `requested` undefined) and closes the game again. */
@@ -248,7 +220,7 @@ async function playOnce(requested) {
     const started = spawned[0];
     const running = await invoke('launcher:getState');
     assert.strictEqual(running.gameRunning, true);
-    const engine = started.command === FAKE_PROJECTOR.executable ? 'projector' : 'flashbrowser';
+    const engine = started.command === FAKE_PROJECTOR.executable ? 'projector' : 'air';
     assert.strictEqual(running.gameEngine, engine, 'the state says which engine is running');
     // The program closing ends the game session.
     started.child.emit('exit', 0, null);
@@ -262,14 +234,16 @@ async function playOnce(requested) {
 function checkNoRuffle() {
     assert.ok(!fs.existsSync(path.join(ROOT, 'lib', 'ruffleWindow.js')), 'lib/ruffleWindow.js is gone');
     assert.ok(!fs.existsSync(path.join(ROOT, 'tools', 'test-ruffle-window.js')), 'and its test');
+    assert.ok(!fs.existsSync(path.join(ROOT, 'lib', 'flashBrowser.js')), 'lib/flashBrowser.js is gone');
+    assert.ok(!fs.existsSync(path.join(ROOT, 'flashbrowser')), 'and its game-window app');
     const files = ['main.js', 'preload.js', 'package.json', 'renderer/index.html', 'renderer/renderer.js', 'renderer/styles.css', 'README.md'];
-    for (const directory of ['lib', 'flashbrowser']) {
+    for (const directory of ['lib', 'air']) {
         const walk = (dir) => {
             for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
                 const relative = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
                     walk(relative);
-                } else if (/\.(js|json|html|css)$/.test(entry.name)) {
+                } else if (/\.(js|json|html|css|as|xml)$/.test(entry.name)) {
                     files.push(relative);
                 }
             }
@@ -283,167 +257,94 @@ function checkNoRuffle() {
     report('[test-legacy-engine] no Ruffle in the launcher: OK');
 }
 
-/** 32-bit Windows and Linux: no FlashBrowser, and with no Flash Player nothing at all starts. */
+/** Without Flash Player or AIR nothing at all starts. */
 async function checkWithoutFlashPlayer() {
-    startLauncher({ platform: 'linux', arch: 'x64', directories: [] });
-    for (const saved of ['flashbrowser', 'projector', ...UNKNOWN_ENGINES]) {
+    installedProjector = null;
+    startLauncher({ air: null });
+    for (const saved of ['air', 'projector', ...UNKNOWN_ENGINES]) {
         seedState({ chosenEngine: saved, engine: saved });
-        for (const requested of [undefined, 'projector', 'ruffle']) {
+        for (const requested of [undefined, 'projector', 'ruffle', 'flashbrowser']) {
             const { result } = await playOnce(requested);
             assert.strictEqual(result.ok, false, `saved ${saved}, asked for ${requested}: nothing can start`);
             assert.match(result.message, /Flash Player is missing/, 'it is Flash Player that is missing');
         }
-        const { result } = await playOnce('flashbrowser');
-        assert.deepStrictEqual(result, { ok: false, message: 'FlashBrowser is not available on this system. Play Legacy instead.' });
+        const { result } = await playOnce('air');
+        assert.deepStrictEqual(result, {
+            ok: false,
+            message: 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set, or play Legacy.'
+        });
     }
     const state = await invoke('launcher:getState');
-    checkState(state, { offered: false, found: false, ready: false });
+    checkState(state, { found: false, ready: false });
     assert.strictEqual(state.flash.found, false);
-    assert.strictEqual(state.flash.armed, false);
     assert.strictEqual(state.engine, 'projector');
-    report('[test-legacy-engine] without Flash Player or FlashBrowser nothing starts, whatever was saved or asked for: OK');
+    report('[test-legacy-engine] without Flash Player or AIR nothing starts, whatever was saved or asked for: OK');
 }
 
-/** Where FlashBrowser is not offered, every play is Legacy and the FlashBrowser button says why. */
-async function checkNotOffered() {
+/** No AIR engine in the build: every play is Legacy, and a saved AIR pick falls back to it. */
+async function checkNoAir() {
     installedProjector = FAKE_PROJECTOR;
-    for (const [platform, arch] of [
-        ['win32', 'ia32'],
-        ['linux', 'x64']
-    ]) {
-        // Even a complete FlashBrowser folder left lying around is not used: there is no build for here.
-        startLauncher({ platform, arch, directories: [makeFlashBrowser('win32-x64', { complete: true })] });
-        checkState(await invoke('launcher:getState'), { offered: false, found: false, ready: false });
-
-        for (const saved of ['flashbrowser', 'projector', ...UNKNOWN_ENGINES]) {
-            seedState({ chosenEngine: saved });
-            assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', `${platform}-${arch}, saved ${saved}: Legacy`);
-            const plain = await playOnce(undefined);
-            assert.strictEqual(plain.engine, 'projector', `${platform}-${arch}, saved ${saved}: a plain play starts Legacy`);
-            assert.deepStrictEqual(plain.started.args, [SWF_URL]);
-
-            const refused = await playOnce('flashbrowser');
-            assert.deepStrictEqual(refused.result, {
-                ok: false,
-                message: 'FlashBrowser is not available on this system. Play Legacy instead.'
-            });
-        }
-
-        const main = await playOnce('projector');
-        assert.strictEqual(main.engine, 'projector', 'the main button starts Legacy');
-        report(`[test-legacy-engine] ${platform}-${arch}: no FlashBrowser, every play is Legacy: OK`);
+    startLauncher({ air: null });
+    checkState(await invoke('launcher:getState'), { found: false, ready: false });
+    for (const saved of ['air', 'projector', ...UNKNOWN_ENGINES]) {
+        seedState({ chosenEngine: saved });
+        assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', `saved ${saved}: Legacy`);
+        const plain = await playOnce(undefined);
+        assert.strictEqual(plain.engine, 'projector', `saved ${saved}: a plain play starts Legacy`);
+        assert.deepStrictEqual(plain.started.args, [SWF_URL]);
+        const refused = await playOnce('air');
+        assert.strictEqual(refused.result.ok, false, 'the AIR button starts nothing without the engine');
     }
+    report('[test-legacy-engine] no AIR engine, every play is Legacy: OK');
 }
 
-/** Windows x64 and macOS: Legacy by default, FlashBrowser on its button, and the pick remembered. */
-async function checkOffered() {
+/** A build with the AIR engine: Legacy by default, AIR on its button, and the pick remembered. */
+async function checkAir() {
     installedProjector = FAKE_PROJECTOR;
-    for (const [platform, arch, target] of [
-        ['win32', 'x64', 'win32-x64'],
-        ['win32', 'arm64', 'win32-x64'],
-        ['darwin', 'x64', 'darwin-x64'],
-        ['darwin', 'arm64', 'darwin-x64']
-    ]) {
-        const root = makeFlashBrowser(target, { complete: true });
-        startLauncher({ platform, arch, directories: [root] });
-        const label = `${platform}-${arch}`;
-        checkState(await invoke('launcher:getState'), { offered: true, found: true, ready: true, tampered: false });
+    startLauncher({ air: FAKE_AIR });
+    checkState(await invoke('launcher:getState'), { found: true, ready: true, tampered: false });
 
-        // Nobody has picked anything: Legacy.
-        seedState();
-        assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', `${label}: Legacy is the default`);
-        let play = await playOnce(undefined);
-        assert.strictEqual(play.engine, 'projector', `${label}: a plain play starts Legacy`);
-        assert.ok(!savedState().chosenEngine, 'a plain play picks nothing');
+    seedState();
+    assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', 'Legacy is the default');
+    let play = await playOnce(undefined);
+    assert.strictEqual(play.engine, 'projector', 'a plain play starts Legacy');
+    assert.ok(!savedState().chosenEngine, 'a plain play picks nothing');
 
-        // Older values, and the older `engine` key, play Legacy.
-        for (const saved of UNKNOWN_ENGINES) {
-            seedState({ chosenEngine: saved, engine: 'flashbrowser' });
-            assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', `${label}, saved ${saved}: Legacy`);
-            play = await playOnce(undefined);
-            assert.strictEqual(play.engine, 'projector', `${label}, saved ${saved}: a plain play starts Legacy`);
-            assert.ok(!('engine' in savedState()), 'the older engine key is dropped on the next write');
-            // A play naming an engine this launcher does not have is a plain play.
-            play = await playOnce('ruffle');
-            assert.strictEqual(play.engine, 'projector');
-        }
-
-        // The FlashBrowser button: FlashBrowser, on the game page, with the plugin, at 100 fps.
-        seedState();
+    for (const saved of UNKNOWN_ENGINES) {
+        seedState({ chosenEngine: saved, engine: 'flashbrowser' });
+        assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', `saved ${saved}: Legacy`);
+        play = await playOnce(undefined);
+        assert.strictEqual(play.engine, 'projector', `saved ${saved}: a plain play starts Legacy`);
+        assert.ok(!('engine' in savedState()), 'the older engine key is dropped on the next write');
         play = await playOnce('flashbrowser');
-        assert.deepStrictEqual(play.result, { ok: true });
-        assert.strictEqual(play.engine, 'flashbrowser', `${label}: the FlashBrowser button starts FlashBrowser`);
-        const found = realFlashBrowser.inspectFlashBrowser(root, target);
-        assert.strictEqual(play.started.command, found.executable, 'the FlashBrowser runtime is what starts');
-        assert.strictEqual(play.started.args[0], found.appDir, 'on the game-window app');
-        assert.ok(play.started.args.includes(`--db-game-url=${GAME_URL}`), 'on the game page');
-        assert.ok(play.started.args.includes(`--db-plugin=${found.pluginPath}`), 'with the plugin');
-        assert.ok(play.started.args.includes(`--db-user-data=${path.join(userData, 'flashbrowser')}`), 'in its own profile');
-        assert.ok(!play.started.args.includes('--db-vsync'), 'at the game\'s own frame rate');
-        assert.strictEqual(savedState().chosenEngine, 'flashbrowser', 'the pick is remembered');
-
-        // ...so the next plain play -- the start-up play of a remembered player -- is FlashBrowser.
-        assert.strictEqual((await invoke('launcher:getState')).engine, 'flashbrowser', `${label}: the saved pick is honoured`);
-        play = await playOnce(undefined);
-        assert.strictEqual(play.engine, 'flashbrowser', `${label}: a plain play follows the pick`);
-        assert.strictEqual(savedState().chosenEngine, 'flashbrowser', 'and keeps it');
-
-        // DB_VSYNC=1 hands the frame pacing back to Chromium.
-        process.env.DB_VSYNC = '1';
-        try {
-            play = await playOnce('flashbrowser');
-            assert.ok(play.started.args.includes('--db-vsync'), 'DB_VSYNC=1 keeps vsync');
-        } finally {
-            delete process.env.DB_VSYNC;
-        }
-
-        // The main button goes back to Legacy, and that is remembered too.
-        play = await playOnce('projector');
-        assert.strictEqual(play.engine, 'projector', `${label}: the main button starts Legacy`);
-        assert.deepStrictEqual(play.started.args, [SWF_URL]);
-        assert.strictEqual(savedState().chosenEngine, 'projector');
-        assert.strictEqual((await invoke('launcher:getState')).engine, 'projector');
-        play = await playOnce(undefined);
-        assert.strictEqual(play.engine, 'projector');
-
-        report(`[test-legacy-engine] ${label}: Legacy by default, FlashBrowser on its button and remembered: OK`);
+        assert.strictEqual(play.engine, 'projector', 'a play naming FlashBrowser is a plain play');
     }
-}
 
-/** An install whose FlashBrowser is incomplete: a saved FlashBrowser pick plays Legacy. */
-async function checkMissing() {
-    installedProjector = FAKE_PROJECTOR;
-    startLauncher({ platform: 'darwin', arch: 'x64', directories: [makeFlashBrowser('darwin-x64', { complete: false })] });
-    const state = await invoke('launcher:getState');
-    checkState(state, { offered: true, found: false, ready: false });
-    assert.ok(state.flashBrowser.missing.length > 0, 'the state says what FlashBrowser lacks');
+    seedState();
+    play = await playOnce('air');
+    assert.deepStrictEqual(play.result, { ok: true });
+    assert.strictEqual(play.engine, 'air', 'the AIR button starts AIR');
+    assert.strictEqual(play.started.command, FAKE_AIR.executable, 'the AIR bundle is what starts');
+    assert.strictEqual(play.started.args[0], SWF_URL, 'on the game SWF');
+    assert.strictEqual(savedState().chosenEngine, 'air', 'the pick is remembered');
 
-    seedState({ chosenEngine: 'flashbrowser' });
-    assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', 'a missing FlashBrowser falls back to Legacy');
-    const plain = await playOnce(undefined);
-    assert.strictEqual(plain.engine, 'projector', 'a plain play starts Legacy');
-    assert.strictEqual(savedState().chosenEngine, 'flashbrowser', 'the pick is kept for when FlashBrowser is back');
+    assert.strictEqual((await invoke('launcher:getState')).engine, 'air', 'the saved pick is honoured');
+    play = await playOnce(undefined);
+    assert.strictEqual(play.engine, 'air', 'a plain play follows the pick');
 
-    const refused = await playOnce('flashbrowser');
-    assert.deepStrictEqual(refused.result, {
-        ok: false,
-        message: 'FlashBrowser is missing. Run `npm run fetch-flash-browser`, or play Legacy.'
-    });
+    play = await playOnce('projector');
+    assert.strictEqual(play.engine, 'projector', 'the main button starts Legacy');
+    assert.strictEqual(savedState().chosenEngine, 'projector');
+    play = await playOnce(undefined);
+    assert.strictEqual(play.engine, 'projector');
 
-    // With no Flash Player either, a saved FlashBrowser pick says what Legacy lacks.
+    // AIR still plays where Flash Player is missing.
     installedProjector = null;
-    startLauncher({ platform: 'darwin', arch: 'x64', directories: [makeFlashBrowser('darwin-x64', { complete: false })] });
-    seedState({ chosenEngine: 'flashbrowser' });
-    const nothing = await playOnce(undefined);
-    assert.strictEqual(nothing.result.ok, false);
-    assert.match(nothing.result.message, /Flash Player is missing/);
-
-    // FlashBrowser still plays where Flash Player is missing.
-    startLauncher({ platform: 'darwin', arch: 'x64', directories: [makeFlashBrowser('darwin-x64', { complete: true })] });
+    startLauncher({ air: FAKE_AIR });
     seedState();
     assert.match((await playOnce(undefined)).result.message, /Flash Player is missing/, 'the default is still Legacy');
-    assert.strictEqual((await playOnce('flashbrowser')).engine, 'flashbrowser', 'and the FlashBrowser button still plays');
-    report('[test-legacy-engine] a missing FlashBrowser falls back to Legacy and its button says why: OK');
+    assert.strictEqual((await playOnce('air')).engine, 'air', 'and the AIR button still plays');
+    report('[test-legacy-engine] Legacy by default, AIR on its button and remembered: OK');
 }
 
 /**
@@ -467,9 +368,8 @@ async function main() {
     try {
         checkNoRuffle();
         await checkWithoutFlashPlayer();
-        await checkNotOffered();
-        await checkOffered();
-        await checkMissing();
+        await checkNoAir();
+        await checkAir();
         await checkUpdateDownload();
     } finally {
         console.log = consoleLog;
