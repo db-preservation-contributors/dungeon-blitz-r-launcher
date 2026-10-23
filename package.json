@@ -33,7 +33,7 @@
     "build:bridge": "cmake -S native_bridge -B native_bridge/build -DCMAKE_BUILD_TYPE=Release && cmake --build native_bridge/build --config Release"
   },
   "devDependencies": {
-    "electron": "^41.10.7",
+    "electron": "^42.11.9",
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
