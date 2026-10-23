@@ -211,6 +211,14 @@ jobs:
         # npm run dist:win / dist:win:ia32 pair each run their own predist hook.
         run: node tools/preflight.js --platform ${{ matrix.platform }} --arch ${{ matrix.arch || 'x64' }}
 
+      - name: Keep Spotlight off the disk images
+        if: matrix.platform == 'darwin'
+        # dmgbuild mounts the new .dmg, fills it and ejects it. Spotlight indexing the freshly
+        # copied apps (the launcher and FlashBrowser's Electron 11) can hold the volume open past
+        # every retry, and 1.9.0's first run failed on exactly that: `hdiutil: couldn't eject
+        # "disk2" - Resource busy`. The runner is thrown away afterwards, so nothing is lost.
+        run: sudo mdutil -a -i off || echo "Could not turn Spotlight indexing off; building anyway."
+
       - name: Build installers
         # --publish always uploads the installers AND the latest*.yml metadata the
         # launcher's auto-updater reads; without those files an installed launcher can
