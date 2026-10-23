@@ -14,7 +14,7 @@ const {
 } = require('../lib/graphics');
 const { buildLoaderSwf } = require('../lib/loaderSwf');
 const { prepareLaunch } = require('../lib/projector');
-const { prepareFlashBrowserLaunch } = require('../lib/flashBrowser');
+const { prepareAirLaunch } = require('../lib/airEngine');
 const { createStateStore } = require('../lib/config');
 
 const GB = 1024 * 1024 * 1024;
@@ -100,15 +100,8 @@ try {
 }
 report('Flash Player is started with the chosen quality: OK');
 
-const found = { executable: 'e', appDir: 'a', pluginPath: 'p' };
-const base = { gameUrl: 'http://x/', userDataDir: 'd', env: {} };
-const gpuArgs = prepareFlashBrowserLaunch(found, { ...base, renderer: 'gpu', quality: 'high' }).args;
-assert.ok(!gpuArgs.includes('--db-cpu-render') && !gpuArgs.some((arg) => arg.startsWith('--db-quality')));
-const cpuArgs = prepareFlashBrowserLaunch(found, { ...base, renderer: 'cpu', quality: 'low' }).args;
-assert.ok(cpuArgs.includes('--db-cpu-render') && cpuArgs.includes('--db-quality=low'));
-const host = fs.readFileSync(path.join(__dirname, '..', 'flashbrowser', 'main.js'), 'utf8');
-assert.ok(host.includes("'disable-gpu'") && host.includes('preload.js'), 'the game window honours both');
-report('FlashBrowser gets the renderer and quality: OK');
+assert.deepStrictEqual(prepareAirLaunch({ executable: 'e' }, 'http://x/g.swf', { quality: flashQuality('low') }).args, ['http://x/g.swf', `--quality=${flashQuality('low')}`]);
+report('the AIR engine gets the quality: OK');
 
 const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'db-graphics-state-'));
 try {

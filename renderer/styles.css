@@ -243,8 +243,7 @@ button:focus-visible {
   cursor: not-allowed;
 }
 
-/* FlashBrowser sits under the main button, quieter: Legacy is the way to play, and this is
-   there for players who want the smoother frame rate. */
+/* The AIR engine sits under the main button, quieter: Legacy is the way to play. */
 .alt-engine {
   display: flex;
   flex-direction: column;
