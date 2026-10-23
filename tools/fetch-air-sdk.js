@@ -69,7 +69,9 @@ function extract(archive, directory, platform) {
     if (platform === 'darwin') {
         execFileSync('ditto', ['-x', '-k', archive, directory], { stdio: 'inherit' });
     } else if (platform === 'win32') {
-        execFileSync('tar', ['-xf', archive, '-C', directory], { stdio: 'inherit' });
+        // Windows' bsdtar, not Git Bash's GNU tar, which reads "D:" as a remote host.
+        const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+        execFileSync(tar, ['-xf', archive, '-C', directory], { stdio: 'inherit' });
     } else {
         execFileSync('unzip', ['-q', archive, '-d', directory], { stdio: 'inherit' });
     }
