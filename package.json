@@ -1,6 +1,6 @@
 {
   "name": "dungeon-blitz-r-launcher",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "private": true,
   "description": "Dungeon Blitz: R launcher that runs the game in Adobe's standalone Flash Player or Adobe AIR",
   "homepage": "https://theminesa.studio",

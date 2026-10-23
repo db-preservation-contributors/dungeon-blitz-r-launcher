@@ -16,3 +16,4 @@ lib/air.integrity.json
 
 # tools/build-air.js's staging folder and self-signed certificate.
 /build/air/
+/build/air-sdk/
