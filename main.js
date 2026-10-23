@@ -12,6 +12,7 @@ const discordAuth = require('./lib/discordAuth');
 const { exists, inspectInstallLocation, isWritableDirectory } = require('./lib/install');
 const { GameHost } = require('./lib/gameHost');
 const { findFlashBrowser, prepareFlashBrowserLaunch, verifyFlashBrowser } = require('./lib/flashBrowser');
+const { findAirApp, prepareAirLaunch, verifyAirApp } = require('./lib/airEngine');
 const { openGameTunnel } = require('./lib/gameTunnel');
 const { verifyProjector } = require('./lib/integrity');
 const {
@@ -221,7 +222,9 @@ const gameHost = new GameHost({ presence });
 // with FlashBrowser's PPAPI Flash plugin, in a Chromium 87 window (lib/flashBrowser.js) -- is
 // the second button, where this system has one (Windows x64 and macOS): it runs the game at its
 // own 100 fps where the standalone player holds about 60, and is there for that smoothness.
-const ENGINES = ['projector', 'flashbrowser'];
+// AIR -- the game in Adobe AIR's runtime (lib/airEngine.js) -- is a third button, where the build
+// carries its bundle.
+const ENGINES = ['projector', 'flashbrowser', 'air'];
 
 let launcherWindow = null;
 // The program running the game -- FlashBrowser or the standalone Flash Player -- and which
@@ -239,6 +242,7 @@ let loginCode = { required: false, rejected: false, ended: false };
 let pendingLoginCode = '';
 let projector = null;
 let flashBrowser = { offered: false, target: '', found: null, partial: null, tampered: false, tamperReason: '' };
+let airApp = null;
 let discordAccount = { linked: false, email: '', name: '' };
 let remembered = false;
 let serverReachable = null;
@@ -302,6 +306,24 @@ function flashBrowserReady() {
     return Boolean(flashBrowser.found && !flashBrowser.tampered);
 }
 
+/** Whether the game can be started in the AIR engine. */
+function airReady() {
+    return Boolean(airApp && !airApp.tampered);
+}
+
+/** Why the AIR engine cannot start the game right now, or '' when it can. */
+function airProblem() {
+    if (!airApp) {
+        return app.isPackaged
+            ? 'The AIR engine is not part of this install. Play Legacy instead.'
+            : 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set, or play Legacy.';
+    }
+    if (airApp.tampered) {
+        return `${airApp.tamperReason}. Reinstall the launcher, or play Legacy.`;
+    }
+    return '';
+}
+
 /**
  * The engine a plain "play" uses -- the main button, the start-up play of a remembered player,
  * and the play after a sign-in: FlashBrowser if the player last picked it with its button and it
@@ -309,14 +331,21 @@ function flashBrowserReady() {
  * read (lib/config.js), so it lands on Legacy too.
  */
 function preferredEngine() {
-    if (state.read().chosenEngine === 'flashbrowser' && flashBrowserReady()) {
+    const chosen = state.read().chosenEngine;
+    if (chosen === 'flashbrowser' && flashBrowserReady()) {
         return 'flashbrowser';
+    }
+    if (chosen === 'air' && airReady()) {
+        return 'air';
     }
     return 'projector';
 }
 
 /** Why an engine cannot start the game right now, or '' when it can. */
 function engineProblem(engine) {
+    if (engine === 'air') {
+        return airProblem();
+    }
     return engine === 'flashbrowser' ? flashBrowserProblem() : flashPlayerProblem();
 }
 
@@ -356,7 +385,19 @@ function gameRunning() {
 
 // Both engines are found once at startup, and the projector again whenever the player picks
 // one by hand. Each is started fresh for every game, so a new choice applies on the next play.
+function locateAirApp() {
+    const found = findAirApp();
+    if (found && app.isPackaged) {
+        const check = verifyAirApp(found.path);
+        found.tampered = !check.ok;
+        found.tamperReason = check.reason;
+    }
+    return found;
+}
+
 function findFlashPlayer() {
+    airApp = locateAirApp();
+    console.log(airApp ? `[AIR] ${airApp.executable}${airApp.tampered ? ` REFUSED: ${airApp.tamperReason}` : ''}` : '[AIR] No AIR engine in this build.');
     flashBrowser = locateFlashBrowser();
     if (flashBrowser.found) {
         console.log(`[FlashBrowser] ${flashBrowser.target} at ${flashBrowser.found.root}`);
@@ -418,7 +459,7 @@ function resolveSelectedServer() {
  * DUNGEON_BLITZ_ALLOW_NO_FLASH=1 keeps a deliberately Flash-less build startable.
  */
 function buildIsPlayable() {
-    if (!app.isPackaged || projectorReady() || flashBrowserReady()) {
+    if (!app.isPackaged || projectorReady() || flashBrowserReady() || airReady()) {
         return true;
     }
     return process.env.DUNGEON_BLITZ_ALLOW_NO_FLASH === '1';
@@ -543,6 +584,11 @@ function flashBrowserStatus() {
     };
 }
 
+/** The AIR engine, in the launcher state. */
+function airStatus() {
+    return { found: Boolean(airApp), ready: airReady(), tampered: Boolean(airApp && airApp.tampered) };
+}
+
 /** Which Windows this is, in the launcher state: what this machine is and what it can do. */
 function windowsStatus() {
     return {
@@ -613,6 +659,7 @@ function launcherState() {
         windows: windowsStatus(),
         flash: flashStatus(),
         flashBrowser: flashBrowserStatus(),
+        air: airStatus(),
         presence: presenceSummary(),
         social: socialSummary(),
         chat: chatSummary(),
@@ -866,6 +913,35 @@ async function launchProjector(serverUrl, settings) {
 }
 
 /**
+ * Opens the game in the AIR engine: the SWF from the server, in AIR's runtime and window. Like
+ * Legacy, the page's script does not run there, so lib/gameHost.js does its work.
+ *
+ * @returns {Promise<{ ok: boolean, message?: string }>}
+ */
+async function launchAir(serverUrl, settings) {
+    if (app.isPackaged) {
+        const check = verifyAirApp(airApp.path);
+        if (!check.ok) {
+            airApp.tampered = true;
+            airApp.tamperReason = check.reason;
+            console.log(`[AIR] REFUSED: ${check.reason}`);
+            return { ok: false, message: `${check.reason}. Reinstall the launcher, or play Legacy.` };
+        }
+    }
+    const swfUrl = await resolveSwfUrl(serverUrl);
+    const graphics = currentGraphics();
+    const launch = prepareAirLaunch(airApp, swfUrl, { quality: flashQuality(graphics.quality) });
+    console.log(`[AIR] Starting ${launch.command} ${launch.args.join(' ')}`);
+    const started = await spawnGame('air', 'AIR', launch);
+    if (!started.ok) {
+        return started;
+    }
+    gameHost.start({ serverUrl, presence: Boolean(settings.startDiscordBridge) });
+    startAccountPolling();
+    return { ok: true };
+}
+
+/**
  * Opens the game page in FlashBrowser: Electron 11 with FlashBrowser's PPAPI Flash plugin,
  * started as its own program because the launcher's Chromium can no longer host the plugin.
  *
@@ -1017,7 +1093,11 @@ async function play({ engine: requested = '', serverId = '' } = {}) {
         await detectMachineGraphics();
     }
     const launched =
-        engine === 'flashbrowser' ? await launchFlashBrowser(selected.url) : await launchProjector(selected.url, settings);
+        engine === 'flashbrowser'
+            ? await launchFlashBrowser(selected.url)
+            : engine === 'air'
+              ? await launchAir(selected.url, settings)
+              : await launchProjector(selected.url, settings);
     if (!launched.ok) {
         gameHost.stop();
         presence.stop();

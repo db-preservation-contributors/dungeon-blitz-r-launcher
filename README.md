@@ -402,6 +402,32 @@ Once an account is known, the sign-in button is replaced by `Signed in as <name>
 whether the sign-in happened in the launcher or inside the game, where the SWF's own Discord
 flow lands the player (see [Remembered account](#remembered-account)).
 
+## AIR engine (beta)
+
+A third engine, where the build carries it: the game in Adobe AIR's runtime (HARMAN's AIR SDK)
+instead of Flash Player 32. It is 64-bit, has no 4 GB memory ceiling and is still maintained. It
+draws the same way Flash Player does, so it is not faster; the point is memory and a supported
+runtime. The **Play in AIR (beta)** button shows only when `vendor/air/<platform>/` has a bundle.
+
+- `air/src/DungeonBlitzAir.as` fetches the game SWF the launcher passes it and runs it with
+  `loadBytes` in AIR's application sandbox, with the URL's query as flashvars.
+- The game needs the server's AirCompat client patch (`scripts/patch-dungeonblitz-air-compat.ts`
+  in the game repository): it loads the level and art SWFs the same way, and skips
+  `Security.allowDomain` and `ExternalInterface`, which throw in AIR.
+- `lib/airEngine.js` finds and starts the bundle; a packaged launcher checks it against
+  `lib/air.integrity.json`, like Flash Player.
+
+Building it needs the AIR SDK (free for personal use; download it from
+https://airsdk.harman.com/download after accepting its license). ADT builds only for the system it
+runs on:
+
+```bash
+AIR_SDK_HOME=/path/to/AIRSDK npm run build-air   # -> vendor/air/<platform>/
+```
+
+ADT signs the bundle with `DB_AIR_CERT` / `DB_AIR_CERT_PASS`, or a self-signed certificate it makes
+once in `build/air/`.
+
 ## Tamper resistance
 
 An **installed** launcher refuses to be repurposed. A development checkout is exempt from

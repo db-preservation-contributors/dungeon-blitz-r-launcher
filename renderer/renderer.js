@@ -10,6 +10,8 @@ const elements = {
     play: document.getElementById('play'),
     altEngine: document.getElementById('alt-engine'),
     playFlashBrowser: document.getElementById('play-flashbrowser'),
+    airEngine: document.getElementById('air-engine'),
+    playAir: document.getElementById('play-air'),
     status: document.getElementById('status'),
     problem: document.getElementById('problem'),
     repair: document.getElementById('repair'),
@@ -271,7 +273,9 @@ function playButtons(state) {
         mainEngine: 'projector',
         mainPlayable: Boolean(flash.armed && !flash.archMismatch && hasServers),
         flashBrowserOffered: Boolean(browser.offered),
-        flashBrowserPlayable: Boolean(browser.offered && browser.ready && hasServers)
+        flashBrowserPlayable: Boolean(browser.offered && browser.ready && hasServers),
+        airOffered: Boolean(state.air && state.air.found),
+        airPlayable: Boolean(state.air && state.air.ready && hasServers)
     };
 }
 
@@ -281,6 +285,8 @@ function applyPlayButtons(state) {
     // Where there is no FlashBrowser the window is the one-button launcher it always was.
     elements.altEngine.hidden = !buttons.flashBrowserOffered;
     elements.playFlashBrowser.disabled = !buttons.flashBrowserPlayable;
+    elements.airEngine.hidden = !buttons.airOffered;
+    elements.playAir.disabled = !buttons.airPlayable;
     return buttons;
 }
 
@@ -343,6 +349,9 @@ function flashBrowserProblem(state) {
 // player out of the game, or how far the sign-in has got.
 function statusLine(state) {
     if (state.gameRunning) {
+        if (state.gameEngine === 'air') {
+            return 'The game is running (AIR).';
+        }
         return state.gameEngine === 'flashbrowser' ? 'The game is running (FlashBrowser).' : 'The game is running.';
     }
     if (state.discord.loginPending && state.discord.loginCodeRequired) {
@@ -477,6 +486,7 @@ elements.discordLogin.addEventListener('click', async () => {
 async function playWith(engine) {
     elements.play.disabled = true;
     elements.playFlashBrowser.disabled = true;
+    elements.playAir.disabled = true;
     const result = await window.launcher.play(engine);
     if (!result || !result.ok) {
         showProblem((result && result.message) || 'Could not start the game.', 'bad');
@@ -494,6 +504,10 @@ elements.play.addEventListener('click', () => {
 
 elements.playFlashBrowser.addEventListener('click', () => {
     void playWith('flashbrowser');
+});
+
+elements.playAir.addEventListener('click', () => {
+    void playWith('air');
 });
 
 elements.forget.addEventListener('click', async () => {

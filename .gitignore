@@ -13,3 +13,7 @@ vendor/
 lib/projector.integrity.json
 lib/flashbrowser.integrity.json
 lib/flashpreload.integrity.json
+lib/air.integrity.json
+
+# tools/build-air.js's staging folder and self-signed certificate.
+/build/air/
