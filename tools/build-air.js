@@ -47,8 +47,31 @@ function tool(sdk, name) {
     throw new Error(`${name} not found in ${path.join(sdk, 'bin')}; is AIR_SDK_HOME an AIR SDK?`);
 }
 
+function redactArgs(args) {
+    const secretFlags = new Set(['-storepass', '-keystore']);
+    const redacted = [];
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index];
+        if (secretFlags.has(arg)) {
+            redacted.push(arg);
+            if (index + 1 < args.length) {
+                redacted.push('***');
+                index += 1;
+            }
+            continue;
+        }
+        const inline = arg.match(/^(-storepass|-keystore)=(.*)$/);
+        if (inline) {
+            redacted.push(`${inline[1]}=***`);
+            continue;
+        }
+        redacted.push(arg);
+    }
+    return redacted;
+}
+
 function run(command, args) {
-    console.log(`[build-air] ${path.basename(command)} ${args.join(' ')}`);
+    console.log(`[build-air] ${path.basename(command)} ${redactArgs(args).join(' ')}`);
     const shell = process.platform === 'win32' && command.endsWith('.bat');
     // A .bat runs through cmd.exe, which splits unquoted arguments on spaces.
     const passed = shell ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
