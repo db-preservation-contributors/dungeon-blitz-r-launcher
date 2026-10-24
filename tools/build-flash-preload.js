@@ -39,6 +39,10 @@ const MAX_GLIBC = [2, 17];
 
 const CFLAGS = ['-O2', '-shared', '-fPIC', '-Wall', '-Wextra'];
 
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function parseArgs(argv) {
     const args = { platform: process.platform, check: '' };
     for (let index = 0; index < argv.length; index += 1) {
@@ -120,7 +124,7 @@ function checkRlimit(library) {
     const preloaded = preloadedShell(library, script, { LD_DEBUG: 'bindings' });
     for (const symbol of ['getrlimit', 'setrlimit']) {
         assert.ok(
-            new RegExp(`to [^\\n]*/${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\[\\d+\\]: normal symbol \`${symbol}'`).test(preloaded.stderr),
+            new RegExp(`to [^\\n]*/${escapeRegExp(name)} \\[\\d+\\]: normal symbol \`${symbol}'`).test(preloaded.stderr),
             `the shell's ${symbol} does not come from ${name}`
         );
     }
