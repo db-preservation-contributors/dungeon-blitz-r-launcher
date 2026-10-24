@@ -120,7 +120,7 @@ function checkRlimit(library) {
     const preloaded = preloadedShell(library, script, { LD_DEBUG: 'bindings' });
     for (const symbol of ['getrlimit', 'setrlimit']) {
         assert.ok(
-            new RegExp(`to [^\\n]*/${name.replace(/\./g, '\\.')} \\[\\d+\\]: normal symbol \`${symbol}'`).test(preloaded.stderr),
+            new RegExp(`to [^\\n]*/${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\[\\d+\\]: normal symbol \`${symbol}'`).test(preloaded.stderr),
             `the shell's ${symbol} does not come from ${name}`
         );
     }
