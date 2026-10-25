@@ -243,16 +243,7 @@ button:focus-visible {
   cursor: not-allowed;
 }
 
-/* The AIR engine sits under the main button, quieter: Legacy is the way to play. */
-.alt-engine {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  width: 100%;
-  margin-bottom: 4px;
-}
-
+/* A quieter play button: the developer panel's "Play on my server". */
 .db-play-alt {
   width: min(100%, 300px);
   min-height: 30px;
@@ -513,6 +504,55 @@ button:focus-visible {
   margin-top: 6px;
   font-size: 12px;
   text-align: center;
+}
+
+.settings__toggle {
+  cursor: pointer;
+}
+
+/* Developer mode's panel: Create and Join, one group each. */
+.developer__group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.developer__label {
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+.developer__path,
+.developer__status {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.developer__status.bad {
+  color: var(--danger);
+}
+
+.developer__row {
+  display: flex;
+  gap: 6px;
+}
+
+.developer__row input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.42);
+  color: var(--text);
+  font: 11px/1.2 monospace;
+  user-select: text;
+}
+
+.developer .db-play-alt {
+  align-self: center;
 }
 
 body.low-graphics .db-hero__grain,

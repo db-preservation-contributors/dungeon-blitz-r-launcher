@@ -22,6 +22,14 @@ contextBridge.exposeInMainWorld('launcher', {
     gameStatsSync: () => ipcRenderer.invoke('launcher:gameStatsSync'),
     damageMeterOpen: () => ipcRenderer.invoke('launcher:damageMeterOpen'),
     setGraphics: (settings) => ipcRenderer.invoke('launcher:setGraphics', settings),
+    // Developer mode: test servers (Create) and joining one (Join), in AIR.
+    setDevMode: (on) => ipcRenderer.invoke('launcher:setDevMode', on === true),
+    devChooseServer: () => ipcRenderer.invoke('launcher:devChooseServer'),
+    devCreate: () => ipcRenderer.invoke('launcher:devCreate'),
+    devStop: () => ipcRenderer.invoke('launcher:devStop'),
+    devCopyShare: () => ipcRenderer.invoke('launcher:devCopyShare'),
+    devPlayOwn: () => ipcRenderer.invoke('launcher:devPlayOwn'),
+    devJoin: (address) => ipcRenderer.invoke('launcher:devJoin', String(address || '')),
     onState: (handler) => {
         const listener = (_event, state) => handler(state);
         ipcRenderer.on('launcher:state', listener);

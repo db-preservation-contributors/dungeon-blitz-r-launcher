@@ -28,7 +28,21 @@ const elements = {
     engineStatus: document.getElementById('engine-status'),
     graphicsRenderer: document.getElementById('graphics-renderer'),
     graphicsQuality: document.getElementById('graphics-quality'),
-    graphicsNote: document.getElementById('graphics-note')
+    graphicsNote: document.getElementById('graphics-note'),
+    devMode: document.getElementById('dev-mode'),
+    developer: document.getElementById('developer'),
+    devRoot: document.getElementById('dev-root'),
+    devChoose: document.getElementById('dev-choose'),
+    devCreate: document.getElementById('dev-create'),
+    devStop: document.getElementById('dev-stop'),
+    devServerStatus: document.getElementById('dev-server-status'),
+    devShare: document.getElementById('dev-share'),
+    devShareUrl: document.getElementById('dev-share-url'),
+    devCopy: document.getElementById('dev-copy'),
+    devPlayOwn: document.getElementById('dev-play-own'),
+    devJoinAddress: document.getElementById('dev-join-address'),
+    devJoin: document.getElementById('dev-join'),
+    devJoinStatus: document.getElementById('dev-join-status')
 };
 
 const LABELS = { gpu: 'GPU', cpu: 'CPU', high: 'High', medium: 'Medium', low: 'Low' };
@@ -373,6 +387,56 @@ function accountLabel(discord) {
     return email ? `Signed in as ${email}` : 'Signed in';
 }
 
+/**
+ * Developer mode: the switch in Settings, and the panel it shows. Create is a test server from a
+ * game server checkout behind two tunnels; Join plays one by its shared address. Both play in
+ * AIR, so a build without it says so instead.
+ */
+function renderDev(state) {
+    const dev = state.dev || {};
+    const server = dev.server || {};
+    elements.devMode.checked = Boolean(dev.enabled);
+    elements.developer.hidden = !dev.enabled;
+    if (!dev.enabled) {
+        return;
+    }
+
+    const busy = server.state === 'starting' || server.state === 'running';
+    elements.devRoot.textContent = dev.serverRoot ? `Folder: ${dev.serverRoot}` : 'No game server folder chosen yet.';
+    elements.devChoose.disabled = busy;
+    elements.devCreate.hidden = busy;
+    elements.devCreate.disabled = !dev.serverRoot;
+    elements.devStop.hidden = !busy;
+
+    let status = '';
+    if (server.state === 'starting') {
+        status = server.step || 'Starting...';
+    } else if (server.state === 'running') {
+        status = 'Running. Share this address:';
+    } else if (server.state === 'error') {
+        status = server.error;
+    }
+    elements.devServerStatus.textContent = status;
+    elements.devServerStatus.className = server.state === 'error' ? 'developer__status bad' : 'developer__status';
+    if (server.state === 'error' && Array.isArray(server.logTail) && server.logTail.length) {
+        elements.devServerStatus.title = server.logTail.join('\n');
+    } else {
+        elements.devServerStatus.title = '';
+    }
+
+    const running = server.state === 'running';
+    elements.devShare.hidden = !running;
+    elements.devShareUrl.value = running ? server.shareUrl : '';
+    elements.devPlayOwn.hidden = !running;
+    elements.devPlayOwn.disabled = Boolean(state.gameRunning);
+
+    const join = dev.join || {};
+    elements.devJoin.disabled = join.state === 'joining' || Boolean(state.gameRunning);
+    elements.devJoinStatus.textContent =
+        join.state === 'joining' ? 'Joining...' : join.state === 'playing' ? 'Playing on that server.' : join.error || '';
+    elements.devJoinStatus.className = join.error ? 'developer__status bad' : 'developer__status';
+}
+
 function render(state) {
     currentState = state;
 
@@ -439,6 +503,7 @@ function render(state) {
 
     renderEngineStatus(state);
     renderGraphics(state.graphics);
+    renderDev(state);
     elements.versions.textContent = `v${state.appVersion}`;
 }
 
@@ -530,6 +595,54 @@ elements.moveApp.addEventListener('click', async () => {
 
 elements.quit.addEventListener('click', () => {
     void window.launcher.quit();
+});
+
+elements.devMode.addEventListener('change', async () => {
+    const next = await window.launcher.setDevMode(elements.devMode.checked);
+    if (next) {
+        render(next);
+    }
+});
+
+elements.devChoose.addEventListener('click', async () => {
+    const next = await window.launcher.devChooseServer();
+    if (next && next.dev) {
+        render(next);
+    }
+});
+
+elements.devCreate.addEventListener('click', () => {
+    void window.launcher.devCreate();
+});
+
+elements.devStop.addEventListener('click', () => {
+    void window.launcher.devStop();
+});
+
+elements.devCopy.addEventListener('click', async () => {
+    const result = await window.launcher.devCopyShare();
+    elements.devCopy.textContent = result && result.ok ? 'Copied' : 'Copy';
+});
+
+async function playDev(start) {
+    const result = await start();
+    if (result && !result.ok) {
+        showProblem(result.message || 'Could not start the game.', 'bad');
+    }
+}
+
+elements.devPlayOwn.addEventListener('click', () => {
+    void playDev(() => window.launcher.devPlayOwn());
+});
+
+elements.devJoin.addEventListener('click', () => {
+    void playDev(() => window.launcher.devJoin(String(elements.devJoinAddress.value || '').trim()));
+});
+
+elements.devJoinAddress.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        void playDev(() => window.launcher.devJoin(String(elements.devJoinAddress.value || '').trim()));
+    }
 });
 
 window.launcher.onState(render);

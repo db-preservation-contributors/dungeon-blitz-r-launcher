@@ -318,6 +318,35 @@ async function checkFlashOnly() {
     report('[test-engine] a build without AIR plays its Flash Player: OK');
 }
 
+/** Developer mode: off for every player, and its calls do nothing until it is switched on. */
+async function checkDevMode() {
+    installedProjector = null;
+    startLauncher({ air: FAKE_AIR });
+    seedState();
+    let state = await invoke('launcher:getState');
+    assert.strictEqual(state.dev.enabled, false, 'developer mode starts off');
+    assert.strictEqual(state.dev.server.state, 'idle');
+    for (const [channel, ...args] of [['launcher:devJoin', 'https://a.trycloudflare.com/web'], ['launcher:devCreate'], ['launcher:devPlayOwn'], ['launcher:devCopyShare']]) {
+        assert.deepStrictEqual(await invoke(channel, ...args), { ok: false, message: 'Developer mode is off.' }, `${channel} does nothing while it is off`);
+    }
+
+    state = await invoke('launcher:setDevMode', true);
+    assert.strictEqual(state.dev.enabled, true);
+    assert.strictEqual(savedState().devMode, true, 'the switch is remembered');
+    spawned.length = 0;
+    const join = await invoke('launcher:devJoin', 'https://evil.example/web');
+    assert.strictEqual(join.ok, false);
+    assert.match(join.message, /trycloudflare/, 'only a shared trycloudflare address is joined');
+    assert.strictEqual((await invoke('launcher:getState')).dev.join.error, join.message, 'and the panel says why');
+    assert.deepStrictEqual(await invoke('launcher:devPlayOwn'), { ok: false, message: 'Create the server first.' });
+    assert.strictEqual(spawned.length, 0, 'nothing was started');
+
+    state = await invoke('launcher:setDevMode', false);
+    assert.strictEqual(state.dev.enabled, false);
+    assert.strictEqual(savedState().devMode, false);
+    report('[test-engine] developer mode is off until switched on, and refuses what it cannot play: OK');
+}
+
 /**
  * A checkout arms no update check, so the update download has nothing to open -- and a URL
  * the window passes is never opened in its place.
@@ -341,6 +370,7 @@ async function main() {
         await checkWithoutEngines();
         await checkAir();
         await checkFlashOnly();
+        await checkDevMode();
         await checkUpdateDownload();
     } finally {
         console.log = consoleLog;

@@ -12,6 +12,8 @@ const discordAuth = require('./lib/discordAuth');
 const { exists, inspectInstallLocation, isWritableDirectory } = require('./lib/install');
 const { GameHost } = require('./lib/gameHost');
 const { findAirApp, prepareAirLaunch, verifyAirApp } = require('./lib/airEngine');
+const devJoin = require('./lib/devJoin');
+const { DevServer, inspectServerRoot } = require('./lib/devServer');
 const { verifyProjector } = require('./lib/integrity');
 const {
     findFlashPreload,
@@ -214,10 +216,24 @@ function openDamageMeter() {
 // script would have: rich presence and region latency (lib/gameHost.js). The AIR engine too.
 const gameHost = new GameHost({ presence });
 
+// Developer mode (Settings -> Developer mode, off by default): Create runs a game server checkout
+// here as a test server behind two Cloudflare quick tunnels (lib/devServer.js); Join plays one
+// someone shared, or that server, in the AIR engine through a bridge on this machine's game
+// ports (lib/devJoin.js). Neither touches the player's sign-in, presence or the official server.
+const devServer = new DevServer({
+    toolsDir: path.join(app.getPath('userData'), 'tools'),
+    logPath: path.join(app.getPath('userData'), 'dev-server.log'),
+    log: (message) => console.log(message)
+});
+devServer.on('state', () => pushState());
+// The bridge a developer game is played through, closed when that game closes.
+let devBridge = null;
+let devJoinStatus = { state: 'idle', error: '' };
+
 // The game engine: one per build, never a choice. A build that carries the AIR engine -- the game
 // in Adobe AIR's runtime (lib/airEngine.js), Windows x64 and macOS -- plays in it alone, and has no
 // Flash Player in it. The builds AIR has no runtime for (Windows 32-bit, the Windows 7 build,
-// Linux) carry Adobe's standalone Flash Player 32 instead (lib/projector.js), as Legacy did.
+// Linux) carry Adobe's standalone Flash Player 32 instead (lib/projector.js).
 
 let launcherWindow = null;
 // The program running the game -- AIR or the standalone Flash Player -- and which
@@ -574,6 +590,18 @@ function chatSummary() {
     };
 }
 
+/** Developer mode, in the launcher state: the switch, the checkout, Create and Join. */
+function devSummary() {
+    const saved = state.read();
+    return {
+        enabled: saved.devMode,
+        serverRoot: saved.devServerRoot,
+        server: devServer.summary(),
+        join: { ...devJoinStatus },
+        playing: Boolean(devBridge)
+    };
+}
+
 function launcherState() {
     const { servers, selected } = resolveSelectedServer();
 
@@ -594,6 +622,7 @@ function launcherState() {
         gameStats: gameStatsSummary(),
         damageMeter: damageMeterSummary(),
         graphics: graphicsSummary(),
+        dev: devSummary(),
         install: {
             relocate: Boolean(installLocation.relocate),
             reason: String(installLocation.reason || ''),
@@ -880,6 +909,84 @@ function stopGameProcess() {
             // Already gone.
         }
     }
+}
+
+/**
+ * Opens a developer game: the bridge to `target` (lib/devJoin.js openBridge) on this machine's
+ * game ports, then the AIR engine on the SWF the server's page names through it. The bridge is
+ * closed when the game closes. Nothing of the player's own session -- sign-in, presence, lobby
+ * chat, the widget -- is started: a test server is not the server those belong to.
+ *
+ * @returns {Promise<{ ok: boolean, message?: string }>}
+ */
+async function playDevServer(target, label) {
+    if (gameProcess) {
+        return { ok: false, message: 'The game is already running. Close it first.' };
+    }
+    if (preferredEngine() !== 'air') {
+        return { ok: false, message: 'Developer servers play in the AIR engine, and this build does not carry it.' };
+    }
+    const problem = engineProblem('air');
+    if (problem) {
+        return { ok: false, message: problem };
+    }
+    if (app.isPackaged) {
+        const check = verifyAirApp(airApp.path);
+        if (!check.ok) {
+            airApp.tampered = true;
+            airApp.tamperReason = check.reason;
+            return { ok: false, message: `${check.reason}. Reinstall the launcher to play.` };
+        }
+    }
+
+    let bridge;
+    try {
+        bridge = await devJoin.openBridge(target, { log: (message) => console.log(message) });
+    } catch (error) {
+        return { ok: false, message: String((error && error.message) || error) };
+    }
+    try {
+        const swfUrl = await resolveSwfUrl(bridge.pageUrl);
+        const launch = prepareAirLaunch(airApp, swfUrl, { quality: flashQuality(currentGraphics().quality) });
+        console.log(`[Dev] ${label}: starting ${launch.command} ${launch.args.join(' ')}`);
+        const started = await spawnGame('air', 'AIR', launch);
+        if (!started.ok) {
+            bridge.close();
+            return started;
+        }
+        devBridge = bridge;
+        started.child.once('exit', () => {
+            bridge.close();
+            if (devBridge === bridge) {
+                devBridge = null;
+            }
+            if (devJoinStatus.state === 'playing') {
+                devJoinStatus = { state: 'idle', error: '' };
+            }
+            pushState();
+        });
+        pushState();
+        return { ok: true };
+    } catch (error) {
+        bridge.close();
+        return { ok: false, message: `The game could not be started: ${(error && error.message) || error}` };
+    }
+}
+
+/** Join: a test server someone shared, by its https://....trycloudflare.com address. */
+async function joinDevServer(address) {
+    devJoinStatus = { state: 'joining', error: '' };
+    pushState();
+    let result;
+    try {
+        const tunnel = await devJoin.resolveTunnel(address);
+        result = await playDevServer({ mode: 'tunnel', webHost: tunnel.webHost, wsHost: tunnel.wsHost }, `join ${tunnel.webHost}`);
+    } catch (error) {
+        result = { ok: false, message: String((error && error.message) || error) };
+    }
+    devJoinStatus = { state: result.ok ? 'playing' : 'idle', error: result.ok ? '' : result.message };
+    pushState();
+    return result;
 }
 
 /**
@@ -1450,6 +1557,63 @@ function registerIpc() {
     });
     // One play button: the build's own engine runs, whatever the window names.
     ipcMain.handle('launcher:play', () => play());
+
+    // Developer mode. Every call but the switch itself does nothing while it is off.
+    const devOnly = (handler) => (...args) =>
+        state.read().devMode ? handler(...args) : { ok: false, message: 'Developer mode is off.' };
+    ipcMain.handle('launcher:setDevMode', (_event, on) => {
+        state.write({ devMode: on === true });
+        if (on !== true && devServer.running()) {
+            devServer.stop();
+        }
+        return launcherState();
+    });
+    ipcMain.handle(
+        'launcher:devChooseServer',
+        devOnly(async () => {
+            const result = await dialog.showOpenDialog(launcherWindow, {
+                title: 'Choose the game server checkout',
+                properties: ['openDirectory']
+            });
+            if (result.canceled || !result.filePaths.length) {
+                return launcherState();
+            }
+            const chosen = result.filePaths[0];
+            const checkout = inspectServerRoot(chosen);
+            state.write({ devServerRoot: chosen });
+            return checkout.ok ? launcherState() : { ...launcherState(), notice: checkout.problem };
+        })
+    );
+    // Starting takes a while (a download the first time, two tunnels, the server's own start):
+    // the window follows it through the state, so this answers at once.
+    ipcMain.handle(
+        'launcher:devCreate',
+        devOnly(() => {
+            void devServer.start(state.read().devServerRoot);
+            return { ok: true };
+        })
+    );
+    ipcMain.handle('launcher:devStop', devOnly(() => ({ ok: true, server: devServer.stop() })));
+    ipcMain.handle(
+        'launcher:devCopyShare',
+        devOnly(() => {
+            const shareUrl = devServer.summary().shareUrl;
+            if (!shareUrl) {
+                return { ok: false };
+            }
+            clipboard.writeText(shareUrl);
+            return { ok: true };
+        })
+    );
+    ipcMain.handle(
+        'launcher:devPlayOwn',
+        devOnly(() =>
+            devServer.summary().state === 'running'
+                ? playDevServer({ mode: 'local' }, 'own server')
+                : { ok: false, message: 'Create the server first.' }
+        )
+    );
+    ipcMain.handle('launcher:devJoin', devOnly((_event, address) => joinDevServer(String(address || ''))));
     ipcMain.handle('launcher:damageMeterOpen', () => openDamageMeter());
     ipcMain.handle('launcher:quit', () => app.quit());
 }
@@ -1646,6 +1810,12 @@ if (instrumentation) {
 
     app.on('before-quit', () => {
         stopGameProcess();
+        // A test server and its tunnels live only as long as the launcher that made them.
+        devServer.stop();
+        if (devBridge) {
+            devBridge.close();
+            devBridge = null;
+        }
         gameHost.stop();
         presence.stop();
         chatRelay.stop();
