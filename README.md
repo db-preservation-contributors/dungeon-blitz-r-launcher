@@ -1,9 +1,9 @@
 # Dungeon Blitz: R Launcher
 
-A desktop launcher that plays Dungeon Blitz in Legacy -- Adobe Flash Player 32, the standalone
-player, which ships inside the launcher -- so players do not need a browser that still has
-Flash. A build that carries it also offers the AIR engine (the game in Adobe AIR's runtime). It
-ships for Windows, macOS and Linux.
+A desktop launcher that plays Dungeon Blitz in the AIR engine -- the game in Adobe AIR's runtime,
+which ships inside the launcher -- so players do not need a browser that still has Flash. The
+builds AIR has no runtime for (Windows 32-bit, the Windows 7 build, Linux) play in Adobe Flash
+Player 32, the standalone player, instead. It ships for Windows, macOS and Linux.
 
 The launcher is a sign-in screen, not a control panel. It asks for one thing — sign in
 with Discord — and once that is done it opens the game and connects to the server. A player who has signed in before is not asked again.
@@ -55,25 +55,23 @@ comfortable with this project, please talk to us. Open an
 The Minesa Studios directly. We will listen, and we will take down or change whatever you
 ask us to without argument. We would much rather work with you than against you.
 
-## Game engines: Legacy and AIR
+## Game engine: AIR, and Flash Player where AIR has none
 
-Legacy is the way to play. AIR is a second button where the build carries it:
+One build, one engine, and one **Open the game** button. Nothing is picked by the player:
 
-| Button | Engine | Where |
-| --- | --- | --- |
-| **Open the game** | Legacy: Adobe's standalone Flash Player 32 (`flashplayer_32_sa`, `lib/projector.js`) | Everywhere; the main button and the default |
-| **Play in AIR (beta)** | AIR: the game in Adobe AIR's runtime (`lib/airEngine.js`, see [AIR engine](#air-engine-beta)) | Windows and macOS builds that carry the bundle |
+| Build | Engine |
+| --- | --- |
+| Windows x64, macOS | AIR: the game in Adobe AIR's runtime (`lib/airEngine.js`, see [AIR engine](#air-engine)). These builds carry **no Flash Player**. |
+| Windows ia32, the Windows 7 build, Linux | Adobe's standalone Flash Player 32 (`flashplayer_32_sa`, `lib/projector.js`), which AIR has no runtime for there |
 
-The launcher remembers the button a player last pressed, as `chosenEngine` in
-`launcher-state.json`: `projector` for the main button, `air` for AIR. A remembered player's
-automatic start at launch, and the play that follows a sign-in, use AIR only if that was the
-last pick and AIR can run here; everything else plays Legacy. A saved `flashbrowser` (FlashBrowser,
-the engine earlier launchers offered, is gone) or any other value plays Legacy, and
-the older `engine` key is dropped on purpose.
+An AIR build never looks for a Flash Player: `main.js` `preferredEngine()` is AIR wherever the
+build carries the bundle, even one whose files were changed (it then says so and plays nothing),
+and Flash Player only in a build with no AIR engine. The `chosenEngine` and `engine` keys older
+launchers saved in `launcher-state.json` are dropped on the next write.
 
 ### The standalone Flash Player
 
-The main button, **Legacy**, runs the game in **Adobe Flash Player itself** -- `flashplayer_32_sa`,
+In the builds AIR has no runtime for, the game runs in **Adobe Flash Player itself** -- `flashplayer_32_sa`,
 the standalone player Adobe calls the projector. The launcher starts it on the game's SWF,
 straight from the selected server:
 
@@ -150,7 +148,7 @@ The launcher window has a **Graphics** panel with two choices, both saved in `la
   software rendering. Low and medium quality are set by the loader file (`_quality`) before
   the game loads. `DB_FLASH_RENDER` still overrides the renderer. Linux keeps starting on the
   game's URL: its player fetches the game through the loader but never runs it, so the
-  quality setting does not reach Legacy there.
+  quality setting does not reach Flash Player there.
 - AIR: the quality is passed to the AIR app (`--quality=`), which sets the stage quality.
 - Picking CPU also turns off the launcher window's own GPU use, after a restart.
 
@@ -275,20 +273,23 @@ Sign-in needs nothing from the page:
 - If the game is already open when the player signs in, the OAuth callback signs that open
   connection in.
 
-### A build without Flash Player
+### A build without its engine
 
-A **packaged** launcher always ships its own Flash Player. One that can run neither Flash
-Player nor the AIR engine refuses to start: it shows an error box naming the path it is running from and quits, rather than
-leaving a player on a sign-in screen that leads nowhere. Set
-`DUNGEON_BLITZ_ALLOW_NO_FLASH=1` for a deliberately Flash-less build.
+A **packaged** launcher always ships its own engine. One that can run neither the AIR engine nor
+Flash Player refuses to start: it shows an error box naming the path it is running from and
+quits, rather than leaving a player on a sign-in screen that leads nowhere. Set
+`DUNGEON_BLITZ_ALLOW_NO_FLASH=1` to start one anyway.
 
-Development checkouts are exempt from that refusal. There, a missing player is one
-`npm run fetch-projector` away, and the launcher window says so.
+Development checkouts are exempt from that refusal. There, a missing engine is one
+`npm run build-air` (or `npm run fetch-projector`) away, and the launcher window says so.
 
 The 1.0.3 macOS release shipped exactly that refusal dialog. The macOS build packaged an app
 with no Flash in it, and the build check only printed a warning that nobody read. So
-`tools/preflight.js` now **fails** the build when the target platform has no Flash Player in
-`vendor/projector/`. A deliberately Flash-less package must set
+`tools/preflight.js` **fails** the build when the package lacks its engine:
+`--engine air` (the Windows x64 and macOS builds) needs the AIR bundle in `vendor/air/<platform>/`
+matching its fingerprint, and fails if a Flash Player sits in `vendor/projector/<platform>/`,
+where it would ship beside it; `--engine flash` (the default) needs Flash Player in
+`vendor/projector/`. A deliberately Flash-less Flash build must set
 `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASH=1`.
 
 ### The status strip
@@ -304,26 +305,24 @@ The sign-in screen carries a status strip with four rows, the ones a player care
 
 Hovering a value shows the detail: the local presence endpoint, or the last error.
 
-Machine and engine details are not rows. A missing, changed or unrunnable Flash Player or
-AIR engine, or a Windows that is too old, is said in the problem banner above the strip
-instead. Flash Player is what the main button runs, so one that cannot run turns that button
-off; its problem is shown after a cancelled sign-in and the answer to a hand-picked Flash
-Player, and before an unreachable server or a launcher run from a disk image. An AIR engine
-problem only takes away its own button and says that the main button still plays, so it is
-shown last. `main.js` prints the Flash Player and AIR lines on the console, and
-`node tools/test-launcher-status.js` checks every state of the strip, the banner and the play
-buttons.
+Machine and engine details are not rows. A missing, changed or unrunnable engine -- the build's
+own, AIR or Flash Player -- or a Windows that is too old, is said in the problem banner above
+the strip instead, and turns the play button off. It is shown after a cancelled sign-in and the
+answer to a hand-picked Flash Player, and before an unreachable server or a launcher run from a
+disk image. An AIR build says nothing about Flash Player at all. `main.js` prints the engine
+lines on the console, and `node tools/test-launcher-status.js` checks every state of the strip,
+the banner and the play button.
 
 Once an account is known, the sign-in button is replaced by `Signed in as <name>`. That holds
 whether the sign-in happened in the launcher or inside the game, where the SWF's own Discord
 flow lands the player (see [Remembered account](#remembered-account)).
 
-## AIR engine (beta)
+## AIR engine
 
-A third engine, where the build carries it: the game in Adobe AIR's runtime (HARMAN's AIR SDK)
-instead of Flash Player 32. It is 64-bit, has no 4 GB memory ceiling and is still maintained. It
-draws the same way Flash Player does, so it is not faster; the point is memory and a supported
-runtime. The **Play in AIR (beta)** button shows only when `vendor/air/<platform>/` has a bundle.
+The engine of the Windows x64 and macOS builds: the game in Adobe AIR's runtime (HARMAN's AIR
+SDK) instead of Flash Player 32. It is 64-bit, has no 4 GB memory ceiling and is still
+maintained. It draws the same way Flash Player does, so it is not faster; the point is memory and
+a supported runtime. A build plays in it whenever `vendor/air/<platform>/` has a bundle.
 
 - `air/src/DungeonBlitzAir.as` fetches the game SWF the launcher passes it and runs it with
   `loadBytes` in AIR's application sandbox, with the URL's query as flashvars.
@@ -336,7 +335,7 @@ runtime. The **Play in AIR (beta)** button shows only when `vendor/air/<platform
 Building it needs the AIR SDK (free for personal use; download it from
 https://airsdk.harman.com/download after accepting its license). ADT builds only for the system it
 runs on. Windows and macOS only: the Linux AIR runtime runs only for commercially licensed
-developers, so `build-air` refuses Linux and Linux packages play Legacy alone.
+developers, so `build-air` refuses Linux and Linux packages play Flash Player.
 
 ```bash
 AIR_SDK_HOME=/path/to/AIRSDK npm run build-air   # -> vendor/air/<platform>/
@@ -347,7 +346,8 @@ once in `build/air/`.
 
 Releases build it on the Windows x64 and macOS runners: `tools/fetch-air-sdk.js` downloads the SDK
 pinned in `air-sdk.lock.json` (version and SHA-256 per platform) into `build/air-sdk/<platform>/`,
-then `build-air` packages it. The ia32, Windows 7 and Linux installers ship without it.
+then `build-air` packages it, and those two runs fetch no Flash Player. The ia32, Windows 7 and
+Linux installers ship Flash Player instead.
 
 ```bash
 AIR_SDK_HOME=$(node tools/fetch-air-sdk.js | tail -1) npm run build-air
@@ -458,8 +458,7 @@ Silicon runs both under Rosetta, and CI builds on the Intel runner. Electron nee
 The Windows targets build `ia32` as well as `x64`, so the releases page carries
 `-win-ia32-setup.exe` and `-win-ia32-portable.exe`. **They play**: `flashplayer_32_sa.exe`
 is itself a 32-bit program in its own process, so it runs on 32-bit and 64-bit Windows
-alike. The AIR engine is 64-bit, so the ia32 packages carry none and show only the main
-Legacy button.
+alike. The AIR engine is 64-bit, so the ia32 packages carry none and play Flash Player.
 
 Up to 1.0.16, the 32-bit installers opened and then refused to play. The game ran in an
 x86_64 PPAPI plugin loaded *into* the launcher process, and a 32-bit process cannot load
@@ -482,8 +481,8 @@ every Windows release comes in two builds of the same launcher:
 | Main | `...-win-x64-*`, `...-win-ia32-*` | 41 | 10 and 11 |
 | Windows 7 | `...-win7-x64-*`, `...-win7-ia32-*` | 22, the last that runs on Windows 7 | 7, 8, 8.1, 10 and 11 |
 
-Both play the current game the same way: same code, same servers, same sign-in, same Legacy
-(Flash Player 32 runs on Windows 7). The Windows 7 build is `build/win7.config.js`: package.json's `build` with
+Both play the current game the same way: same code, same servers, same sign-in, and the same
+engine: Flash Player 32, which runs on Windows 7 (its builds carry no AIR). The Windows 7 build is `build/win7.config.js`: package.json's `build` with
 Electron 22, `win7` in the file names and its own installer check. Vista and XP have no
 Electron at all and are refused by both.
 
@@ -838,11 +837,12 @@ npm run dist:win
 npm run dist:win7     # the Windows 7 build, on Electron 22 (dist:win7:ia32 for 32-bit)
 ```
 
-Each `dist:` script first fetches Flash Player for its platform
-(`tools/fetch-projector.js`). It then runs `tools/preflight.js`, which fails the build when
-that platform has no Flash Player in `vendor/projector/`. The AIR engine is optional: run
-`npm run build-air` first (see [AIR engine](#air-engine-beta)) for a package that carries it. For a deliberately Flash-less
-package, set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASH=1`.
+`dist:win` and `dist:mac` are AIR packages: run `npm run build-air` first (see
+[AIR engine](#air-engine)); `tools/preflight.js --engine air` fails the build without the bundle,
+or with a Flash Player left in `vendor/projector/<platform>/` from another build (delete it).
+The other `dist:` scripts first fetch Flash Player for their platform
+(`tools/fetch-projector.js`) and fail without it. For a deliberately Flash-less Flash package,
+set `DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASH=1`.
 
 The application icon comes from one source image, `build/icon.png` (1024×1024 with alpha).
 `npm run make-icons` derives the rest from it on a Mac: `build/icon.icns` (macOS app, dock
@@ -1017,21 +1017,52 @@ drives the module against a local mock.
 | `tools/test-chat-relay.js` | Own-chat mirroring once, queueing while the lobby is down, inbound printing, unsupported servers |
 | `tools/test-social-bridge.js` | Discord-client and browser authorization paths, lobby join, two-way chat |
 | `tools/test-discord-ipc.js` | The RPC framing, `AUTHORIZE` payload and PING/PONG |
-| `tools/test-launcher-status.js` | Every state of the status strip, the account row and the play buttons |
+| `tools/test-launcher-status.js` | Every state of the status strip, the account row and the play button |
 | `tools/test-damage-meter.js` | The combat feed against a mock server: no feed, no session, the backlog, playback at the pace of play, a new level, game data fetched from the game server only, exports and settings |
 | `tools/test-install-location.js` | Disk-image and Downloads detection, and what is deliberately not flagged |
 | `tools/test-windows-support.js` | Which Windows versions and architectures start, and how the others are refused |
 | `tools/test-projector.js` | Finding Flash Player, the SWF it opens, the pinned downloads, its fingerprint, and the presence and region-latency work done for the game page |
-| `tools/test-legacy-engine.js` | `main.js` itself, with Electron stubbed: Legacy is the default everywhere, AIR is offered when the build carries it and its button starts it, a saved AIR pick is honoured when it can run and falls back to Legacy when it cannot, and any other saved engine (FlashBrowser's included) plays Legacy |
+| `tools/test-engine.js` | `main.js` itself, with Electron stubbed: an AIR build plays AIR whatever was saved or asked for and never looks for a Flash Player, a build without AIR plays Flash Player, the old engine picks are dropped, and developer mode refuses everything until it is switched on |
 | `tools/test-air-engine.js` | Finding the AIR bundle on each platform, how it is started, its fingerprint, and the app descriptor's version |
+| `tools/test-dev-join.js` | Developer Join: share addresses, the two tunnels a shared address names, both game sockets over the WebSocket (against a stand-in), the policy answer, local mode, and a port already in use |
+| `tools/test-dev-server.js` | Developer Create: the checkout and how it starts, the test-server environment, the Node check, the pinned cloudflared, the quick tunnel's ready rule, and a refused Create |
 | `tools/test-updater.js` | The electron-updater state machine, the restart gate and the check cadence |
 | `tools/test-update-notice.js` | Which builds self-update and which get a notice, the release feed, the download each build is offered, and quiet failures |
 | `tools/test-discord-login-key.js` | The Discord sign-in's one-time key: only its hash in the browser URL, the key in a header, and a login finished at another address still reaching the launcher |
 
 `.github/workflows/tests.yml` runs them on every push and pull request, so a broken Flash
 guard, presence mapping or chat relay fails before an installer is built.
-`.github/workflows/flash-player.yml` downloads and unpacks Flash Player on all three
-platforms whenever the lock file or the fetch script changes.
+`.github/workflows/flash-player.yml` downloads and unpacks Flash Player on Windows and Linux,
+the platforms whose builds still carry it, whenever the lock file or the fetch script changes.
+
+## Developer mode: Create and Join
+
+For people who work on the game, not for players: **Settings -> Developer mode** shows a
+Developer panel (off by default, remembered as `devMode`). Everything in it plays in the AIR
+engine, and none of it touches the player's sign-in, presence, lobby chat or the widget.
+
+- **Create a server** runs a game server checkout on this machine as a test server
+  (`lib/devServer.js`): choose the repository's folder (or its `src/server`, with `npm install`
+  done there), press **Create server**, and share the `https://....trycloudflare.com/web`
+  address it shows. It needs Node 18 or later on PATH. It runs local mode on 8100 (web),
+  8180 (game) and 8181 (WebSocket) -- beside a normal `npm run dev` -- with no database, Discord,
+  widget or health ping, and opens two Cloudflare quick tunnels to 8100 and 8181. A checkout
+  with its own `src/server/start-test-server.js` is started through it. The server's output
+  goes to `dev-server.log` in the launcher's data folder; **Stop**, or quitting the launcher,
+  ends the server and its tunnels. **Play on my server** plays it from here.
+- **Join a server** plays one by the address someone shared (`lib/devJoin.js`).
+
+A test server serves the SWF in local mode, so the game loads its files from `localhost:8000` and
+opens raw sockets to `localhost:8080` (login) and `localhost:8180` (the world, named by the
+enter-world packet). The launcher listens on those ports and carries them to the server: over
+the tunnels for Join (the web tunnel over HTTPS, both game sockets over the WebSocket, since the
+server lets a world entry be redeemed only from the address that logged in), or to 8100 / 8180
+for the developer's own server. Port 843 answers Flash's socket policy.
+
+`cloudflared` is not packaged. The first Create downloads the release pinned in
+`lib/cloudflared.js` from Cloudflare's GitHub releases into the launcher's data folder and
+checks it against the SHA-256 GitHub publishes for it; a mismatch is deleted and never run.
+Quick tunnels get new addresses on every Create.
 
 ## Optional: the game repository
 

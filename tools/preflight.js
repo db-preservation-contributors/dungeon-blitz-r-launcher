@@ -2,21 +2,28 @@
 'use strict';
 
 /**
- * Checks that a build's target platform has the standalone Flash Player
- * (flashplayer_32_sa) in vendor/projector/ before electron-builder runs.
+ * Checks that a build's target platform has its game engine in vendor/ before electron-builder
+ * runs: one engine per build (main.js preferredEngine).
  *
- * The projector is the game engine. A package without it runs, but can only play if the
- * player happens to have a Flash Player of their own, and almost nobody does: the packaged
- * launcher refuses to start instead. 1.0.3's macOS build shipped Flash-less exactly this
- * way, so a missing projector fails the build; a deliberate Flash-less package has to say
- * so with DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASH=1.
+ * --engine air (Windows x64, macOS): the AIR engine bundle tools/build-air.js made, matching its
+ * fingerprint -- and NO Flash Player. vendor/ is packaged by platform, not by build, so a
+ * flashplayer left in vendor/projector/<platform> from an ia32 or Windows 7 build would ship in the
+ * AIR package; that fails the build instead.
  *
- * Usage: node tools/preflight.js [--platform win32|darwin|linux] [--arch x64|ia32]
+ * --engine flash (the default: Windows ia32, Windows 7, Linux, which AIR has no runtime for): the
+ * standalone Flash Player (flashplayer_32_sa) in vendor/projector/. A package without it runs,
+ * but can only play if the player happens to have a Flash Player of their own, and almost nobody
+ * does: the packaged launcher refuses to start instead. 1.0.3's macOS build shipped Flash-less
+ * exactly this way, so a missing projector fails the build; a deliberate Flash-less package has
+ * to say so with DUNGEON_BLITZ_PREFLIGHT_ALLOW_NO_FLASH=1.
+ *
+ * Usage: node tools/preflight.js [--platform win32|darwin|linux] [--arch x64|ia32] [--engine air|flash]
  */
 
 const fs = require('fs');
 const path = require('path');
 
+const { airAppInDirectory, verifyAirApp } = require('../lib/airEngine');
 const { macBundleExecutable, parseBinaryArchitectures } = require('../lib/binary');
 const { canExecute, projectorInDirectory } = require('../lib/projector');
 const { verifyProjector } = require('../lib/integrity');
@@ -24,6 +31,7 @@ const { findUnpackagedFiles } = require('../lib/packageFiles');
 
 const LAUNCHER_ROOT = path.resolve(__dirname, '..');
 const PROJECTOR_ROOT = path.join(LAUNCHER_ROOT, 'vendor', 'projector');
+const AIR_ROOT = path.join(LAUNCHER_ROOT, 'vendor', 'air');
 
 const EXPECTED_PROJECTOR = {
     win32: 'flashplayer_32_sa.exe',
@@ -56,6 +64,49 @@ function parseArch(argv) {
         return String(argv[index + 1]);
     }
     return '';
+}
+
+/** 'air' or 'flash' (the default): which engine this package carries. */
+function parseEngine(argv) {
+    const index = argv.indexOf('--engine');
+    return index >= 0 && argv[index + 1] === 'air' ? 'air' : 'flash';
+}
+
+/**
+ * An AIR package: the bundle tools/build-air.js made, with the fingerprint an installed launcher
+ * checks before every game -- and no Flash Player beside it.
+ */
+function checkAir(platform) {
+    let ok = true;
+    const air = airAppInDirectory(path.join(AIR_ROOT, platform), platform);
+    if (!air) {
+        console.error('');
+        console.error(`[preflight] ERROR: no AIR engine for ${platform} in ${path.join(AIR_ROOT, platform)}.`);
+        console.error('[preflight] Run `AIR_SDK_HOME=<sdk> npm run build-air`, then rebuild.');
+        console.error('');
+        ok = false;
+    } else {
+        const fingerprint = verifyAirApp(air.path, { platform });
+        if (!fingerprint.ok) {
+            console.error('');
+            console.error(`[preflight] ERROR: AIR engine fingerprint: ${fingerprint.reason}.`);
+            console.error('[preflight] Run `npm run build-air` again, then rebuild.');
+            console.error('');
+            ok = false;
+        } else {
+            console.log(`[preflight] ${platform}: AIR engine ready -> ${path.basename(air.path)}`);
+        }
+    }
+
+    const flash = projectorInDirectory(path.join(PROJECTOR_ROOT, platform), platform);
+    if (flash) {
+        console.error('');
+        console.error(`[preflight] ERROR: ${flash} would ship in this AIR package, which carries no Flash Player.`);
+        console.error(`[preflight] Delete ${path.join(PROJECTOR_ROOT, platform)} (fetch it again for an ia32 or Windows 7 build).`);
+        console.error('');
+        ok = false;
+    }
+    return ok;
 }
 
 /**
@@ -163,6 +214,7 @@ function main() {
     const argv = process.argv.slice(2);
     const platform = parsePlatform(argv);
     const arch = parseArch(argv);
+    const engine = parseEngine(argv);
     if (!EXPECTED_PROJECTOR[platform]) {
         console.error(`[preflight] Unknown platform: ${platform}`);
         console.error('[preflight] Expected one of: win32, darwin, linux');
@@ -171,8 +223,8 @@ function main() {
 
     // Both run either way, so fixing one failure does not hide the other.
     const filesOk = checkPackagedFiles();
-    const flashOk = checkProjector(platform, arch);
-    if (!filesOk || !flashOk) {
+    const engineOk = engine === 'air' ? checkAir(platform) : checkProjector(platform, arch);
+    if (!filesOk || !engineOk) {
         process.exit(1);
     }
 }

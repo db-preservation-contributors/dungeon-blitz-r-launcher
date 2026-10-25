@@ -53,13 +53,9 @@
         </div>
         <span id="login-code-error" class="login-code__error" hidden>Wrong code. Check your browser and try again.</span>
       </div>
-      <!-- The main play button: Legacy, Adobe Flash Player 32, the standalone player. -->
+      <!-- The play button: the game in the build's engine -- Adobe AIR, or the standalone Flash
+           Player in the builds AIR has no runtime for. -->
       <button id="play" type="button" class="db-play">Open the game</button>
-
-      <!-- AIR: the game in Adobe AIR's runtime, where the build carries it. Hidden everywhere else. -->
-      <div id="air-engine" class="alt-engine" hidden>
-        <button id="play-air" type="button" class="db-play-alt">Play in AIR (beta)</button>
-      </div>
 
       <!-- Signing in is a one-time thing: once an account is known the button is replaced by
            it, whether the sign-in happened here or inside the game. -->
@@ -109,6 +105,44 @@
         </select>
       </div>
       <p id="graphics-note" class="graphics__note"></p>
+    </details>
+
+    <details id="settings" class="graphics">
+      <summary>Settings</summary>
+      <label class="graphics__row settings__toggle" for="dev-mode">
+        <span>Developer mode</span>
+        <input id="dev-mode" type="checkbox">
+      </label>
+      <p class="graphics__note">Create and join test servers. Players do not need it.</p>
+    </details>
+
+    <!-- Developer mode: a test server from a game server checkout, behind two Cloudflare quick
+         tunnels (Create), and playing one in AIR from its shared address (Join). -->
+    <details id="developer" class="graphics developer" open hidden>
+      <summary>Developer</summary>
+      <div class="developer__group">
+        <span class="developer__label">Create a server</span>
+        <span id="dev-root" class="developer__path"></span>
+        <div class="developer__row">
+          <button id="dev-choose" type="button" class="ghost">Choose folder...</button>
+          <button id="dev-create" type="button" class="ghost">Create server</button>
+          <button id="dev-stop" type="button" class="ghost" hidden>Stop</button>
+        </div>
+        <span id="dev-server-status" class="developer__status"></span>
+        <div id="dev-share" class="developer__row" hidden>
+          <input id="dev-share-url" type="text" readonly>
+          <button id="dev-copy" type="button" class="ghost">Copy</button>
+        </div>
+        <button id="dev-play-own" type="button" class="db-play-alt" hidden>Play on my server</button>
+      </div>
+      <div class="developer__group">
+        <label class="developer__label" for="dev-join-address">Join a server</label>
+        <div class="developer__row">
+          <input id="dev-join-address" type="text" spellcheck="false" autocomplete="off" placeholder="https://....trycloudflare.com/web">
+          <button id="dev-join" type="button" class="ghost">Join</button>
+        </div>
+        <span id="dev-join-status" class="developer__status"></span>
+      </div>
     </details>
 
     <div id="tools" class="tools">

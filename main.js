@@ -12,6 +12,8 @@ const discordAuth = require('./lib/discordAuth');
 const { exists, inspectInstallLocation, isWritableDirectory } = require('./lib/install');
 const { GameHost } = require('./lib/gameHost');
 const { findAirApp, prepareAirLaunch, verifyAirApp } = require('./lib/airEngine');
+const devJoin = require('./lib/devJoin');
+const { DevServer, inspectServerRoot } = require('./lib/devServer');
 const { verifyProjector } = require('./lib/integrity');
 const {
     findFlashPreload,
@@ -214,10 +216,24 @@ function openDamageMeter() {
 // script would have: rich presence and region latency (lib/gameHost.js). The AIR engine too.
 const gameHost = new GameHost({ presence });
 
-// The two game engines. Legacy -- Adobe's standalone Flash Player 32 (lib/projector.js), in its
-// own process and window -- is the main button and the default. AIR -- the game in Adobe AIR's
-// runtime (lib/airEngine.js) -- is the second button, where the build carries its bundle.
-const ENGINES = ['projector', 'air'];
+// Developer mode (Settings -> Developer mode, off by default): Create runs a game server checkout
+// here as a test server behind two Cloudflare quick tunnels (lib/devServer.js); Join plays one
+// someone shared, or that server, in the AIR engine through a bridge on this machine's game
+// ports (lib/devJoin.js). Neither touches the player's sign-in, presence or the official server.
+const devServer = new DevServer({
+    toolsDir: path.join(app.getPath('userData'), 'tools'),
+    logPath: path.join(app.getPath('userData'), 'dev-server.log'),
+    log: (message) => console.log(message)
+});
+devServer.on('state', () => pushState());
+// The bridge a developer game is played through, closed when that game closes.
+let devBridge = null;
+let devJoinStatus = { state: 'idle', error: '' };
+
+// The game engine: one per build, never a choice. A build that carries the AIR engine -- the game
+// in Adobe AIR's runtime (lib/airEngine.js), Windows x64 and macOS -- plays in it alone, and has no
+// Flash Player in it. The builds AIR has no runtime for (Windows 32-bit, the Windows 7 build,
+// Linux) carry Adobe's standalone Flash Player 32 instead (lib/projector.js).
 
 let launcherWindow = null;
 // The program running the game -- AIR or the standalone Flash Player -- and which
@@ -287,24 +303,22 @@ function airReady() {
 function airProblem() {
     if (!airApp) {
         return app.isPackaged
-            ? 'The AIR engine is not part of this install. Play Legacy instead.'
-            : 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set, or play Legacy.';
+            ? 'The AIR engine is not part of this install. Reinstall the launcher to play.'
+            : 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set.';
     }
     if (airApp.tampered) {
-        return `${airApp.tamperReason}. Reinstall the launcher, or play Legacy.`;
+        return `${airApp.tamperReason}. Reinstall the launcher to play.`;
     }
     return '';
 }
 
 /**
- * The engine a plain "play" uses -- the main button, the start-up play of a remembered player,
- * and the play after a sign-in: AIR if the player last picked it with its button and it
- * can run here; otherwise Legacy, the default. A saved value naming any other engine is never
- * read (lib/config.js), so it lands on Legacy too.
+ * The engine every play uses: AIR wherever the build carries it -- even one whose files were
+ * changed, which then says so rather than falling back -- and Flash Player only in a build with
+ * no AIR engine that has one. With neither it is AIR, the engine a current build is missing.
  */
 function preferredEngine() {
-    const chosen = state.read().chosenEngine;
-    if (chosen === 'air' && airReady()) {
+    if (airApp || !projector) {
         return 'air';
     }
     return 'projector';
@@ -318,7 +332,7 @@ function engineProblem(engine) {
     return flashPlayerProblem();
 }
 
-/** Why the standalone Flash Player (Legacy) cannot start the game right now, or '' when it can. */
+/** Why the standalone Flash Player cannot start the game right now, or '' when it can. */
 function flashPlayerProblem() {
     if (!projector) {
         return 'Flash Player is missing. Choose the standalone Flash Player (flashplayer_32_sa) by hand.';
@@ -351,6 +365,11 @@ function locateAirApp() {
 function findFlashPlayer() {
     airApp = locateAirApp();
     console.log(airApp ? `[AIR] ${airApp.executable}${airApp.tampered ? ` REFUSED: ${airApp.tamperReason}` : ''}` : '[AIR] No AIR engine in this build.');
+    // A build with the AIR engine plays nothing else, so Flash Player is not even looked for.
+    if (airApp) {
+        projector = null;
+        return;
+    }
     projector = locateProjector(state.read().projectorPath);
     if (!projector) {
         console.log('[Flash] No standalone Flash Player found; the launcher will ask for one.');
@@ -408,13 +427,13 @@ function buildIsPlayable() {
 function refuseToStart() {
     const vendored = findVendoredProjector();
     const detail = [
-        'This copy of the launcher has no Flash Player, so the game could not start even after signing in.',
+        'This copy of the launcher has no game engine (AIR or Flash Player), so the game could not start even after signing in.',
         '',
         `Running from: ${app.getAppPath()}`,
         'This is an incomplete or outdated build.',
         '',
-        'Fix: install the current build again from the .dmg or .zip, or in a development',
-        'checkout run `npm run fetch-projector` and start it there.',
+        'Fix: install the current build again from the installer, or in a development',
+        'checkout run `npm run build-air` (or `npm run fetch-projector`) and start it there.',
         '',
         'To start anyway (a deliberately Flash-less build), set DUNGEON_BLITZ_ALLOW_NO_FLASH=1.'
     ].join('\n');
@@ -571,6 +590,18 @@ function chatSummary() {
     };
 }
 
+/** Developer mode, in the launcher state: the switch, the checkout, Create and Join. */
+function devSummary() {
+    const saved = state.read();
+    return {
+        enabled: saved.devMode,
+        serverRoot: saved.devServerRoot,
+        server: devServer.summary(),
+        join: { ...devJoinStatus },
+        playing: Boolean(devBridge)
+    };
+}
+
 function launcherState() {
     const { servers, selected } = resolveSelectedServer();
 
@@ -591,6 +622,7 @@ function launcherState() {
         gameStats: gameStatsSummary(),
         damageMeter: damageMeterSummary(),
         graphics: graphicsSummary(),
+        dev: devSummary(),
         install: {
             relocate: Boolean(installLocation.relocate),
             reason: String(installLocation.reason || ''),
@@ -838,8 +870,8 @@ async function launchProjector(serverUrl, settings) {
 }
 
 /**
- * Opens the game in the AIR engine: the SWF from the server, in AIR's runtime and window. Like
- * Legacy, the page's script does not run there, so lib/gameHost.js does its work.
+ * Opens the game in the AIR engine: the SWF from the server, in AIR's runtime and window. The
+ * page's script does not run there, so lib/gameHost.js does its work.
  *
  * @returns {Promise<{ ok: boolean, message?: string }>}
  */
@@ -850,7 +882,7 @@ async function launchAir(serverUrl, settings) {
             airApp.tampered = true;
             airApp.tamperReason = check.reason;
             console.log(`[AIR] REFUSED: ${check.reason}`);
-            return { ok: false, message: `${check.reason}. Reinstall the launcher, or play Legacy.` };
+            return { ok: false, message: `${check.reason}. Reinstall the launcher to play.` };
         }
     }
     const swfUrl = await resolveSwfUrl(serverUrl);
@@ -880,12 +912,87 @@ function stopGameProcess() {
 }
 
 /**
- * @param {{ engine?: string, serverId?: string }} [options] `engine` is the button the player
- *   pressed ('projector' for Legacy, or 'air'), and is remembered for the next plain
- *   play; without it the preferred engine runs -- Legacy, unless the player last picked
- *   AIR and it can run here.
+ * Opens a developer game: the bridge to `target` (lib/devJoin.js openBridge) on this machine's
+ * game ports, then the AIR engine on the SWF the server's page names through it. The bridge is
+ * closed when the game closes. Nothing of the player's own session -- sign-in, presence, lobby
+ * chat, the widget -- is started: a test server is not the server those belong to.
+ *
+ * @returns {Promise<{ ok: boolean, message?: string }>}
  */
-async function play({ engine: requested = '', serverId = '' } = {}) {
+async function playDevServer(target, label) {
+    if (gameProcess) {
+        return { ok: false, message: 'The game is already running. Close it first.' };
+    }
+    if (preferredEngine() !== 'air') {
+        return { ok: false, message: 'Developer servers play in the AIR engine, and this build does not carry it.' };
+    }
+    const problem = engineProblem('air');
+    if (problem) {
+        return { ok: false, message: problem };
+    }
+    if (app.isPackaged) {
+        const check = verifyAirApp(airApp.path);
+        if (!check.ok) {
+            airApp.tampered = true;
+            airApp.tamperReason = check.reason;
+            return { ok: false, message: `${check.reason}. Reinstall the launcher to play.` };
+        }
+    }
+
+    let bridge;
+    try {
+        bridge = await devJoin.openBridge(target, { log: (message) => console.log(message) });
+    } catch (error) {
+        return { ok: false, message: String((error && error.message) || error) };
+    }
+    try {
+        const swfUrl = await resolveSwfUrl(bridge.pageUrl);
+        const launch = prepareAirLaunch(airApp, swfUrl, { quality: flashQuality(currentGraphics().quality) });
+        console.log(`[Dev] ${label}: starting ${launch.command} ${launch.args.join(' ')}`);
+        const started = await spawnGame('air', 'AIR', launch);
+        if (!started.ok) {
+            bridge.close();
+            return started;
+        }
+        devBridge = bridge;
+        started.child.once('exit', () => {
+            bridge.close();
+            if (devBridge === bridge) {
+                devBridge = null;
+            }
+            if (devJoinStatus.state === 'playing') {
+                devJoinStatus = { state: 'idle', error: '' };
+            }
+            pushState();
+        });
+        pushState();
+        return { ok: true };
+    } catch (error) {
+        bridge.close();
+        return { ok: false, message: `The game could not be started: ${(error && error.message) || error}` };
+    }
+}
+
+/** Join: a test server someone shared, by its https://....trycloudflare.com address. */
+async function joinDevServer(address) {
+    devJoinStatus = { state: 'joining', error: '' };
+    pushState();
+    let result;
+    try {
+        const tunnel = await devJoin.resolveTunnel(address);
+        result = await playDevServer({ mode: 'tunnel', webHost: tunnel.webHost, wsHost: tunnel.wsHost }, `join ${tunnel.webHost}`);
+    } catch (error) {
+        result = { ok: false, message: String((error && error.message) || error) };
+    }
+    devJoinStatus = { state: result.ok ? 'playing' : 'idle', error: result.ok ? '' : result.message };
+    pushState();
+    return result;
+}
+
+/**
+ * @param {{ serverId?: string }} [options] The game runs in the build's engine (preferredEngine).
+ */
+async function play({ serverId = '' } = {}) {
     if (gameProcess) {
         // The game's window is its own program's; it is already open.
         return { ok: true };
@@ -900,14 +1007,13 @@ async function play({ engine: requested = '', serverId = '' } = {}) {
         return { ok: false, message: 'No servers configured. Check servers.json.' };
     }
 
-    const chosen = ENGINES.includes(requested);
-    const engine = chosen ? requested : preferredEngine();
+    const engine = preferredEngine();
     const problem = engineProblem(engine);
     if (problem) {
         return { ok: false, message: problem };
     }
 
-    state.write(chosen ? { serverId: selected.id, chosenEngine: engine } : { serverId: selected.id });
+    state.write({ serverId: selected.id });
 
     // Before Flash Player starts, not after: the server signs the game's first connection
     // in from a pending hand-off, and the point of the saved token is that there is already
@@ -1438,8 +1544,6 @@ function registerIpc() {
         return gameStatsSummary();
     });
 
-    // The renderer names the button that was pressed -- 'projector' (Legacy, the main button)
-    // or 'air'; anything else is a plain play of the preferred engine.
     ipcMain.handle('launcher:setGraphics', (_event, settings) => {
         const patch = {};
         if (settings && settings.renderer !== undefined) {
@@ -1451,7 +1555,65 @@ function registerIpc() {
         state.write(patch);
         return launcherState();
     });
-    ipcMain.handle('launcher:play', (_event, engine) => play({ engine: typeof engine === 'string' ? engine : '' }));
+    // One play button: the build's own engine runs, whatever the window names.
+    ipcMain.handle('launcher:play', () => play());
+
+    // Developer mode. Every call but the switch itself does nothing while it is off.
+    const devOnly = (handler) => (...args) =>
+        state.read().devMode ? handler(...args) : { ok: false, message: 'Developer mode is off.' };
+    ipcMain.handle('launcher:setDevMode', (_event, on) => {
+        state.write({ devMode: on === true });
+        if (on !== true && devServer.running()) {
+            devServer.stop();
+        }
+        return launcherState();
+    });
+    ipcMain.handle(
+        'launcher:devChooseServer',
+        devOnly(async () => {
+            const result = await dialog.showOpenDialog(launcherWindow, {
+                title: 'Choose the game server checkout',
+                properties: ['openDirectory']
+            });
+            if (result.canceled || !result.filePaths.length) {
+                return launcherState();
+            }
+            const chosen = result.filePaths[0];
+            const checkout = inspectServerRoot(chosen);
+            state.write({ devServerRoot: chosen });
+            return checkout.ok ? launcherState() : { ...launcherState(), notice: checkout.problem };
+        })
+    );
+    // Starting takes a while (a download the first time, two tunnels, the server's own start):
+    // the window follows it through the state, so this answers at once.
+    ipcMain.handle(
+        'launcher:devCreate',
+        devOnly(() => {
+            void devServer.start(state.read().devServerRoot);
+            return { ok: true };
+        })
+    );
+    ipcMain.handle('launcher:devStop', devOnly(() => ({ ok: true, server: devServer.stop() })));
+    ipcMain.handle(
+        'launcher:devCopyShare',
+        devOnly(() => {
+            const shareUrl = devServer.summary().shareUrl;
+            if (!shareUrl) {
+                return { ok: false };
+            }
+            clipboard.writeText(shareUrl);
+            return { ok: true };
+        })
+    );
+    ipcMain.handle(
+        'launcher:devPlayOwn',
+        devOnly(() =>
+            devServer.summary().state === 'running'
+                ? playDevServer({ mode: 'local' }, 'own server')
+                : { ok: false, message: 'Create the server first.' }
+        )
+    );
+    ipcMain.handle('launcher:devJoin', devOnly((_event, address) => joinDevServer(String(address || ''))));
     ipcMain.handle('launcher:damageMeterOpen', () => openDamageMeter());
     ipcMain.handle('launcher:quit', () => app.quit());
 }
@@ -1648,6 +1810,12 @@ if (instrumentation) {
 
     app.on('before-quit', () => {
         stopGameProcess();
+        // A test server and its tunnels live only as long as the launcher that made them.
+        devServer.stop();
+        if (devBridge) {
+            devBridge.close();
+            devBridge = null;
+        }
         gameHost.stop();
         presence.stop();
         chatRelay.stop();
