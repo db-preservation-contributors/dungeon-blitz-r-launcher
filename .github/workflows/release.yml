@@ -173,10 +173,12 @@ jobs:
         run: node tools/stage-vendor.js --platform ${{ matrix.platform }} --bridge-build native_bridge/build
 
       - name: Fetch Flash Player
+        # The engine of the builds AIR has no runtime for (ia32, Windows 7, Linux) only. The AIR
+        # builds carry no Flash Player at all. It is not in the repository: it is downloaded from
+        # Adobe's update server (the Internet Archive's copy as the fallback) and checked against
+        # projector.lock.json.
+        if: ${{ !matrix.air }}
         shell: bash
-        # Adobe's standalone Flash Player (flashplayer_32_sa) is the game engine. It is not
-        # in the repository: it is downloaded from Adobe's update server (the Internet
-        # Archive's copy as the fallback) and checked against projector.lock.json.
         run: node tools/fetch-projector.js --platform ${{ matrix.platform }}
 
       - name: Build the Flash Player preload
@@ -207,12 +209,13 @@ jobs:
           sdk=$(node tools/fetch-air-sdk.js --platform ${{ matrix.platform }} | tail -1)
           AIR_SDK_HOME="$sdk" node tools/build-air.js
 
-      - name: Check Flash Player
+      - name: Check the game engine
         shell: bash
+        # One engine per build: AIR (and no Flash Player) where matrix.air, Flash Player elsewhere.
         # --arch matters for Windows: the two runs package different architectures, so the
         # check has to be against the one this entry builds. Same reason the local
         # npm run dist:win / dist:win:ia32 pair each run their own predist hook.
-        run: node tools/preflight.js --platform ${{ matrix.platform }} --arch ${{ matrix.arch || 'x64' }}
+        run: node tools/preflight.js --platform ${{ matrix.platform }} --arch ${{ matrix.arch || 'x64' }} --engine ${{ matrix.air && 'air' || 'flash' }}
 
       - name: Keep Spotlight off the disk images
         if: matrix.platform == 'darwin'
@@ -256,6 +259,7 @@ jobs:
           fi
 
       - name: Check Flash Player made it into the package
+        if: ${{ !matrix.air }}
         shell: bash
         # The installers are only worth shipping if the engines inside them, and on Linux what
         # is loaded into Flash Player, are intact: each fingerprint must match the one packed
@@ -295,6 +299,10 @@ jobs:
           esac
           test -n "$bundle" || { echo "the AIR engine is missing from the package"; exit 1; }
           node tools/build-air.js --check "$bundle"
+          # An AIR package plays nothing else: no Flash Player may have come along with it.
+          if find dist -path '*vendor/projector/*' -print -quit | grep -q .; then
+            echo "this AIR package carries a Flash Player"; exit 1
+          fi
 
       - name: Start the packaged launcher
         if: matrix.platform != 'linux'

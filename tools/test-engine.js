@@ -2,26 +2,23 @@
 'use strict';
 
 /**
- * Which engine a play starts: Legacy -- Adobe's standalone Flash Player 32 (lib/projector.js) --
- * is the main button and the default; AIR (lib/airEngine.js) is a second button where the build
- * carries its bundle.
+ * Which engine a play starts: the build's one engine, never a pick. AIR (lib/airEngine.js)
+ * wherever the build carries it -- Windows x64 and macOS, which have no Flash Player in them --
+ * and Adobe's standalone Flash Player 32 (lib/projector.js) only in the builds AIR has no runtime
+ * for (Windows ia32, Windows 7, Linux).
  *
  * main.js itself runs here, with a stand-in for Electron and for the parts that would start
  * real programs (the Flash Player and AIR lookup and launch, the window title, the timer, the
  * game host), and is driven through the same IPC calls the launcher window makes. main.js is
  * loaded once per setup, since it looks for its engines when it starts. It checks that:
  *
- * - a plain play -- the start-up play of a remembered player -- starts Legacy unless the player
- *   last picked AIR with its button and it can run here;
- * - the main button starts Legacy and the AIR button starts AIR, each remembered as
- *   `chosenEngine` for the next plain play;
- * - a saved 'air' falls back to Legacy where the build has no AIR engine, and the AIR button
- *   there says why instead of starting anything;
- * - a saved 'flashbrowser' (FlashBrowser is gone), 'ruffle', an unknown value or the older
- *   `engine` key all play Legacy;
+ * - an AIR build plays AIR whatever was saved or asked for, and never looks for a Flash Player;
+ * - a build without AIR plays its Flash Player;
+ * - with neither, nothing starts and AIR is what is said to be missing;
+ * - the older `chosenEngine` and `engine` picks are dropped on the next write;
  * - nothing anywhere in the launcher's code or state is Ruffle or FlashBrowser.
  *
- * Usage: node tools/test-legacy-engine.js
+ * Usage: node tools/test-engine.js
  */
 
 const assert = require('assert');
@@ -254,97 +251,71 @@ function checkNoRuffle() {
         const body = fs.readFileSync(path.join(ROOT, file), 'utf8');
         assert.ok(!/ruffle/i.test(body), `${file} names no Ruffle`);
     }
-    report('[test-legacy-engine] no Ruffle in the launcher: OK');
+    report('[test-engine] no Ruffle in the launcher: OK');
 }
 
-/** Without Flash Player or AIR nothing at all starts. */
-async function checkWithoutFlashPlayer() {
+/** Without AIR or Flash Player nothing at all starts, and it is AIR that is said to be missing. */
+async function checkWithoutEngines() {
     installedProjector = null;
     startLauncher({ air: null });
     for (const saved of ['air', 'projector', ...UNKNOWN_ENGINES]) {
         seedState({ chosenEngine: saved, engine: saved });
-        for (const requested of [undefined, 'projector', 'ruffle', 'flashbrowser']) {
+        for (const requested of [undefined, 'projector', 'air', 'ruffle']) {
             const { result } = await playOnce(requested);
-            assert.strictEqual(result.ok, false, `saved ${saved}, asked for ${requested}: nothing can start`);
-            assert.match(result.message, /Flash Player is missing/, 'it is Flash Player that is missing');
+            assert.deepStrictEqual(
+                result,
+                { ok: false, message: 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set.' },
+                `saved ${saved}, asked for ${requested}: nothing can start`
+            );
         }
-        const { result } = await playOnce('air');
-        assert.deepStrictEqual(result, {
-            ok: false,
-            message: 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set, or play Legacy.'
-        });
     }
     const state = await invoke('launcher:getState');
     checkState(state, { found: false, ready: false });
-    assert.strictEqual(state.flash.found, false);
-    assert.strictEqual(state.engine, 'projector');
-    report('[test-legacy-engine] without Flash Player or AIR nothing starts, whatever was saved or asked for: OK');
+    assert.strictEqual(state.engine, 'air', 'a build with no engine is missing AIR');
+    report('[test-engine] without AIR or Flash Player nothing starts: OK');
 }
 
-/** No AIR engine in the build: every play is Legacy, and a saved AIR pick falls back to it. */
-async function checkNoAir() {
+/** A build with the AIR engine plays AIR and nothing else: Flash Player is not even looked for. */
+async function checkAir() {
+    // A checkout can hold both; the AIR build never reaches for the Flash Player.
+    installedProjector = FAKE_PROJECTOR;
+    startLauncher({ air: FAKE_AIR });
+    const state = await invoke('launcher:getState');
+    checkState(state, { found: true, ready: true, tampered: false });
+    assert.strictEqual(state.engine, 'air', 'AIR is the engine');
+    assert.strictEqual(state.flash.found, false, 'no Flash Player is reported in an AIR build');
+
+    for (const saved of ['projector', 'air', ...UNKNOWN_ENGINES]) {
+        seedState({ chosenEngine: saved, engine: 'flashbrowser' });
+        for (const requested of [undefined, 'projector', 'air']) {
+            const play = await playOnce(requested);
+            assert.deepStrictEqual(play.result, { ok: true });
+            assert.strictEqual(play.engine, 'air', `saved ${saved}, asked for ${requested}: AIR starts`);
+            assert.strictEqual(play.started.command, FAKE_AIR.executable, 'the AIR bundle is what starts');
+            assert.strictEqual(play.started.args[0], SWF_URL, 'on the game SWF');
+        }
+        const after = savedState();
+        assert.ok(!('chosenEngine' in after) && !('engine' in after), 'the old engine picks are dropped on the next write');
+    }
+    report('[test-engine] an AIR build plays AIR alone, whatever was saved or asked for: OK');
+}
+
+/** A build AIR has no runtime for (ia32, Windows 7, Linux) plays its Flash Player. */
+async function checkFlashOnly() {
     installedProjector = FAKE_PROJECTOR;
     startLauncher({ air: null });
-    checkState(await invoke('launcher:getState'), { found: false, ready: false });
+    const state = await invoke('launcher:getState');
+    checkState(state, { found: false, ready: false });
+    assert.strictEqual(state.engine, 'projector', 'Flash Player is the engine of a build with no AIR');
     for (const saved of ['air', 'projector', ...UNKNOWN_ENGINES]) {
         seedState({ chosenEngine: saved });
-        assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', `saved ${saved}: Legacy`);
-        const plain = await playOnce(undefined);
-        assert.strictEqual(plain.engine, 'projector', `saved ${saved}: a plain play starts Legacy`);
-        assert.deepStrictEqual(plain.started.args, [SWF_URL]);
-        const refused = await playOnce('air');
-        assert.strictEqual(refused.result.ok, false, 'the AIR button starts nothing without the engine');
+        for (const requested of [undefined, 'air', 'projector']) {
+            const play = await playOnce(requested);
+            assert.strictEqual(play.engine, 'projector', `saved ${saved}, asked for ${requested}: Flash Player starts`);
+            assert.deepStrictEqual(play.started.args, [SWF_URL]);
+        }
     }
-    report('[test-legacy-engine] no AIR engine, every play is Legacy: OK');
-}
-
-/** A build with the AIR engine: Legacy by default, AIR on its button, and the pick remembered. */
-async function checkAir() {
-    installedProjector = FAKE_PROJECTOR;
-    startLauncher({ air: FAKE_AIR });
-    checkState(await invoke('launcher:getState'), { found: true, ready: true, tampered: false });
-
-    seedState();
-    assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', 'Legacy is the default');
-    let play = await playOnce(undefined);
-    assert.strictEqual(play.engine, 'projector', 'a plain play starts Legacy');
-    assert.ok(!savedState().chosenEngine, 'a plain play picks nothing');
-
-    for (const saved of UNKNOWN_ENGINES) {
-        seedState({ chosenEngine: saved, engine: 'flashbrowser' });
-        assert.strictEqual((await invoke('launcher:getState')).engine, 'projector', `saved ${saved}: Legacy`);
-        play = await playOnce(undefined);
-        assert.strictEqual(play.engine, 'projector', `saved ${saved}: a plain play starts Legacy`);
-        assert.ok(!('engine' in savedState()), 'the older engine key is dropped on the next write');
-        play = await playOnce('flashbrowser');
-        assert.strictEqual(play.engine, 'projector', 'a play naming FlashBrowser is a plain play');
-    }
-
-    seedState();
-    play = await playOnce('air');
-    assert.deepStrictEqual(play.result, { ok: true });
-    assert.strictEqual(play.engine, 'air', 'the AIR button starts AIR');
-    assert.strictEqual(play.started.command, FAKE_AIR.executable, 'the AIR bundle is what starts');
-    assert.strictEqual(play.started.args[0], SWF_URL, 'on the game SWF');
-    assert.strictEqual(savedState().chosenEngine, 'air', 'the pick is remembered');
-
-    assert.strictEqual((await invoke('launcher:getState')).engine, 'air', 'the saved pick is honoured');
-    play = await playOnce(undefined);
-    assert.strictEqual(play.engine, 'air', 'a plain play follows the pick');
-
-    play = await playOnce('projector');
-    assert.strictEqual(play.engine, 'projector', 'the main button starts Legacy');
-    assert.strictEqual(savedState().chosenEngine, 'projector');
-    play = await playOnce(undefined);
-    assert.strictEqual(play.engine, 'projector');
-
-    // AIR still plays where Flash Player is missing.
-    installedProjector = null;
-    startLauncher({ air: FAKE_AIR });
-    seedState();
-    assert.match((await playOnce(undefined)).result.message, /Flash Player is missing/, 'the default is still Legacy');
-    assert.strictEqual((await playOnce('air')).engine, 'air', 'and the AIR button still plays');
-    report('[test-legacy-engine] Legacy by default, AIR on its button and remembered: OK');
+    report('[test-engine] a build without AIR plays its Flash Player: OK');
 }
 
 /**
@@ -358,7 +329,7 @@ async function checkUpdateDownload() {
     assert.strictEqual(await invoke('launcher:updateDownload', 'https://evil.example/setup.exe'), false);
     assert.strictEqual(await invoke('launcher:updateInstall'), false);
     assert.deepStrictEqual(openedUrls, [], 'nothing was opened in the browser');
-    report('[test-legacy-engine] the update download opens nothing it did not find itself: OK');
+    report('[test-engine] the update download opens nothing it did not find itself: OK');
 }
 
 async function main() {
@@ -367,16 +338,16 @@ async function main() {
     console.log = () => {};
     try {
         checkNoRuffle();
-        await checkWithoutFlashPlayer();
-        await checkNoAir();
+        await checkWithoutEngines();
         await checkAir();
+        await checkFlashOnly();
         await checkUpdateDownload();
     } finally {
         console.log = consoleLog;
         Module._load = originalLoad;
         fs.rmSync(scratch, { recursive: true, force: true });
     }
-    console.log('[test-legacy-engine] all assertions passed');
+    console.log('[test-engine] all assertions passed');
 }
 
 main().catch((error) => {

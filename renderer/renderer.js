@@ -8,8 +8,6 @@ const elements = {
     loginCodeSubmit: document.getElementById('login-code-submit'),
     loginCodeError: document.getElementById('login-code-error'),
     play: document.getElementById('play'),
-    airEngine: document.getElementById('air-engine'),
-    playAir: document.getElementById('play-air'),
     status: document.getElementById('status'),
     problem: document.getElementById('problem'),
     repair: document.getElementById('repair'),
@@ -234,8 +232,11 @@ function showProblem(message, severity) {
     elements.problem.textContent = message || '';
     elements.problem.className = severity === 'bad' ? 'problem bad' : 'problem';
     elements.repair.hidden = !message;
-    // An installed launcher runs only its own, verified Flash Player: nothing to choose.
-    elements.browseFlash.hidden = Boolean(currentState && currentState.flash && currentState.flash.locked);
+    // A Flash Player is only ever chosen by hand in a checkout whose engine is Flash Player: an
+    // installed launcher runs only its own, verified one, and an AIR build runs none at all.
+    elements.browseFlash.hidden = Boolean(
+        currentState && ((currentState.flash && currentState.flash.locked) || engineOf(currentState) === 'air')
+    );
 }
 
 /**
@@ -258,31 +259,35 @@ function installWarning(state) {
 }
 
 /**
- * The play buttons. The main one is Legacy -- Adobe Flash Player 32, the standalone player --
- * the default, so it needs a Flash Player this machine can run and a server to play on.
- * AIR, the game in Adobe AIR's runtime, is the second button where the build carries it.
+ * The build's engine, as main.js names it: AIR wherever the build carries it, and the standalone
+ * Flash Player only in the builds AIR has no runtime for. Never the player's pick.
  */
+function engineOf(state) {
+    return state && state.engine === 'projector' ? 'projector' : 'air';
+}
+
+/** The one play button: it needs the build's engine able to run here, and a server to play on. */
 function playButtons(state) {
-    const flash = state.flash || {};
     const hasServers = Array.isArray(state.servers) && state.servers.length > 0;
-    return {
-        mainEngine: 'projector',
-        mainPlayable: Boolean(flash.armed && !flash.archMismatch && hasServers),
-        airOffered: Boolean(state.air && state.air.found),
-        airPlayable: Boolean(state.air && state.air.ready && hasServers)
-    };
+    const engine = engineOf(state);
+    const flash = state.flash || {};
+    const air = state.air || {};
+    const ready = engine === 'air' ? Boolean(air.ready) : Boolean(flash.armed && !flash.archMismatch);
+    return { engine, playable: ready && hasServers };
 }
 
 function applyPlayButtons(state) {
     const buttons = playButtons(state);
-    elements.play.disabled = !buttons.mainPlayable;
-    // Where there is no AIR engine the window is the one-button launcher it always was.
-    elements.airEngine.hidden = !buttons.airOffered;
-    elements.playAir.disabled = !buttons.airPlayable;
+    elements.play.disabled = !buttons.playable;
     return buttons;
 }
 
-/** What is wrong with Flash Player, which the main (Legacy) button runs, when it cannot run. */
+/** What keeps the build's engine from starting the game, or null. */
+function engineProblem(state) {
+    return engineOf(state) === 'air' ? airProblem(state) : flashPlayerProblem(state);
+}
+
+/** What is wrong with Flash Player, the engine of a build with no AIR, when it cannot run. */
 function flashPlayerProblem(state) {
     const flash = state.flash || {};
     if (!flash.found) {
@@ -312,14 +317,23 @@ function flashPlayerProblem(state) {
     return null;
 }
 
-/** What is wrong with the AIR engine, when this build carries one and it cannot run. */
+/** What is wrong with the AIR engine, the engine of this build, when it cannot run. */
 function airProblem(state) {
     const air = state.air || {};
-    if (air.found && air.tampered) {
+    if (!air.found) {
         return {
             message:
-                'The AIR engine files were changed after installation, so it will not start. ' +
-                'Reinstall the launcher to use it; the main button still plays.',
+                state.flash && state.flash.locked
+                    ? 'The AIR engine is missing from this install. Reinstall the launcher to play.'
+                    : 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set.',
+            severity: 'bad'
+        };
+    }
+    if (air.tampered) {
+        return {
+            message:
+                'The AIR engine files were changed after installation, so the game will not start. ' +
+                'Reinstall the launcher to play.',
             severity: 'bad'
         };
     }
@@ -330,7 +344,7 @@ function airProblem(state) {
 // player out of the game, or how far the sign-in has got.
 function statusLine(state) {
     if (state.gameRunning) {
-        return state.gameEngine === 'air' ? 'The game is running (AIR).' : 'The game is running.';
+        return 'The game is running.';
     }
     if (state.discord.loginPending && state.discord.loginCodeRequired) {
         return 'Enter the code from your browser.';
@@ -389,19 +403,17 @@ function render(state) {
     elements.relaunch.hidden = true;
     elements.forget.hidden = !state.discord.remembered;
 
-    // Whatever keeps the main (Legacy) button from starting the game comes first: a cancelled
-    // sign-in, the answer to the player's own pick of a Flash Player, a Flash Player that cannot
-    // run, an unreachable server. A launcher run from a disk image still plays, so it is said
-    // after those; a fault in the AIR engine only takes away its own button, so it is said last.
+    // Whatever keeps the play button from starting the game comes first: a cancelled sign-in,
+    // the answer to the player's own pick of a Flash Player, an engine that cannot run, an
+    // unreachable server. A launcher run from a disk image still plays, so it is said last.
     const problem =
         (state.discord && state.discord.loginCodeEnded
             ? { message: 'Too many wrong codes, so that sign-in was cancelled. Sign in with Discord again.', severity: 'bad' }
             : null) ||
         (state.notice ? { message: state.notice, severity: 'warn' } : null) ||
-        flashPlayerProblem(state) ||
+        engineProblem(state) ||
         (state.serverReachable === false ? { message: `Could not reach ${state.selectedServerUrl}`, severity: 'bad' } : null) ||
-        installWarning(state) ||
-        airProblem(state);
+        installWarning(state);
     showProblem(problem ? problem.message : '', problem ? problem.severity : '');
 
     elements.moveApp.hidden = !(state.install && state.install.relocate && state.install.canMove);
@@ -461,26 +473,15 @@ elements.discordLogin.addEventListener('click', async () => {
     }
 });
 
-async function playWith(engine) {
+elements.play.addEventListener('click', async () => {
     elements.play.disabled = true;
-    elements.playAir.disabled = true;
-    const result = await window.launcher.play(engine);
+    const result = await window.launcher.play();
     if (!result || !result.ok) {
         showProblem((result && result.message) || 'Could not start the game.', 'bad');
     }
     if (currentState) {
         applyPlayButtons(currentState);
     }
-}
-
-// The main button always plays Legacy, and that pick is remembered like AIR's: a
-// player who goes back to it gets Legacy on the next start-up play too.
-elements.play.addEventListener('click', () => {
-    void playWith('projector');
-});
-
-elements.playAir.addEventListener('click', () => {
-    void playWith('air');
 });
 
 elements.forget.addEventListener('click', async () => {

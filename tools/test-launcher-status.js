@@ -131,6 +131,8 @@ function baseState(flash, social, extra = {}) {
         gameRunning: false,
         flash,
         air: extra.air,
+        // The Flash Player cases below are a build with no AIR; the AIR build says so itself.
+        engine: extra.engine || 'projector',
         social,
         presence: extra.presence || {
             running: false,
@@ -231,14 +233,14 @@ const READY_AIR = { found: true, ready: true, tampered: false };
 const NO_AIR = { found: false, ready: false, tampered: false };
 
 /**
- * The play buttons. The main one plays Legacy, the standalone Flash Player, everywhere. The AIR
- * engine is a second button only where the build carries it; everywhere else the window is the
- * one-button launcher of 1.6.0. FlashBrowser is gone.
+ * The play button. There is one: the game in the build's engine -- AIR where the build carries it,
+ * Flash Player only in a build AIR has no runtime for. Ruffle, FlashBrowser and a second (AIR or
+ * Legacy) button are all gone.
  */
 async function checkPlayButtons(render, registry, plays) {
     const press = async (id) => {
         await registry.get(id).listeners.click();
-        // playWith() awaits the launcher's play call; let it settle.
+        // The play handler awaits the launcher's play call; let it settle.
         await new Promise((resolve) => setImmediate(resolve));
     };
 
@@ -246,70 +248,55 @@ async function checkPlayButtons(render, registry, plays) {
     const script = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
     assert.ok(!/ruffle/i.test(html) && !/ruffle/i.test(script), 'the window names no Ruffle');
     assert.ok(!/flashbrowser/i.test(html) && !/flashbrowser/i.test(script), 'the window names no FlashBrowser');
-    assert.ok(!html.includes('play-projector') && !script.includes('play-projector'), 'there is no second Legacy button');
-    const airButton = /<button id="play-air"[^>]*class="db-play-alt"[^>]*>([^<]*)<\/button>/.exec(html);
-    assert.ok(airButton, 'the AIR button is in the window, in the alt-engine style');
-    assert.match(airButton[1], /AIR/);
-    assert.match(html, /<div id="air-engine" class="alt-engine" hidden>/, 'it starts hidden until the state offers it');
-
-    // A build that carries the AIR engine: Legacy is the main button, AIR the second.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { air: READY_AIR }));
-    assert.strictEqual(registry.get('play').disabled, false, 'Legacy can be started');
-    assert.strictEqual(registry.get('air-engine').hidden, false, 'AIR is offered next to it');
-    assert.strictEqual(registry.get('play-air').disabled, false);
-    assert.strictEqual(registry.get('problem').hidden, true);
-    plays.length = 0;
-    await press('play');
-    await press('play-air');
-    assert.deepStrictEqual(plays, ['play(projector)', 'play(air)'], 'the main button starts Legacy, the other AIR');
-
-    // A player who picked AIR last time: the main button is still Legacy.
-    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { air: READY_AIR }), engine: 'air' });
-    plays.length = 0;
-    await press('play');
-    assert.deepStrictEqual(plays, ['play(projector)'], 'the main button never becomes AIR');
-
-    // No AIR engine in this build: one button, exactly as in 1.6.0.
-    for (const air of [NO_AIR, undefined]) {
-        render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { air }), engine: 'flashbrowser', gameEngine: '' });
-        assert.strictEqual(registry.get('air-engine').hidden, true, 'no AIR button without an AIR engine');
-        assert.strictEqual(registry.get('play').disabled, false);
-        assert.strictEqual(registry.get('problem').hidden, true, 'nothing is said about an engine this build never had');
-        plays.length = 0;
-        await press('play');
-        assert.deepStrictEqual(plays, ['play(projector)'], 'the main button plays Legacy');
+    for (const id of ['play-air', 'air-engine', 'play-projector']) {
+        assert.ok(!html.includes(`id="${id}"`) && !script.includes(`'${id}'`), `there is no ${id} any more`);
     }
 
-    // No server to play on: nothing can be started.
-    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { air: READY_AIR }), servers: [] });
-    assert.strictEqual(registry.get('play').disabled, true, 'no server, no game');
-    assert.strictEqual(registry.get('play-air').disabled, true);
+    // An AIR build: the button plays, and the window names no Flash Player at all.
+    const AIR_BUILD = { ...baseState(MISSING_FLASH, IDLE_SOCIAL, { air: READY_AIR }), engine: 'air' };
+    render(AIR_BUILD);
+    assert.strictEqual(registry.get('play').disabled, false, 'AIR can be started');
+    assert.strictEqual(registry.get('problem').hidden, true, 'a missing Flash Player is nothing to an AIR build');
+    plays.length = 0;
+    await press('play');
+    assert.deepStrictEqual(plays, ['play'], 'the button names no engine');
 
-    // An AIR engine changed after installation is refused, the same as a changed Flash Player.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { air: { found: true, ready: false, tampered: true } }));
-    assert.strictEqual(registry.get('play-air').disabled, true);
-    assert.strictEqual(registry.get('play').disabled, false);
+    // Its AIR engine missing, or changed after installation: refused, and said so.
+    render({ ...AIR_BUILD, air: NO_AIR, flash: { ...MISSING_FLASH, locked: true } });
+    assert.strictEqual(registry.get('play').disabled, true);
+    assert.strictEqual(registry.get('problem').textContent, 'The AIR engine is missing from this install. Reinstall the launcher to play.');
+    assert.strictEqual(registry.get('browse-flash').hidden, true, 'an AIR build offers no Flash Player picker');
+    render({ ...AIR_BUILD, air: NO_AIR });
+    assert.strictEqual(registry.get('problem').textContent, 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set.');
+    assert.strictEqual(registry.get('browse-flash').hidden, true, 'not even in a checkout');
+    render({ ...AIR_BUILD, air: { found: true, ready: false, tampered: true } });
+    assert.strictEqual(registry.get('play').disabled, true);
     assert.ok(registry.get('problem').textContent.includes('AIR engine files were changed after installation'));
     assert.strictEqual(registry.get('problem').className, 'problem bad');
+    // An unreachable server is said after the engine.
+    render({ ...AIR_BUILD, serverReachable: false });
+    assert.strictEqual(registry.get('problem').textContent, 'Could not reach http://example.test/');
 
-    // A Flash Player changed after installation is refused, and so is the main button. Its
-    // fault outranks AIR's.
-    render(
-        baseState({ ...ARMED_FLASH, armed: false, locked: true, tampered: true }, IDLE_SOCIAL, {
-            air: { found: true, ready: false, tampered: true }
-        })
-    );
+    // A build without AIR (ia32, Windows 7, Linux): the same one button plays its Flash Player.
+    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { air: NO_AIR }));
+    assert.strictEqual(registry.get('play').disabled, false);
+    assert.strictEqual(registry.get('problem').hidden, true, 'nothing is said about an engine this build never had');
+    plays.length = 0;
+    await press('play');
+    assert.deepStrictEqual(plays, ['play']);
+
+    // No server to play on: nothing can be started.
+    render({ ...AIR_BUILD, servers: [] });
+    assert.strictEqual(registry.get('play').disabled, true, 'no server, no game');
+
+    // A Flash Player changed after installation is refused.
+    render(baseState({ ...ARMED_FLASH, armed: false, locked: true, tampered: true }, IDLE_SOCIAL));
     assert.strictEqual(registry.get('play').disabled, true, 'a tampered Flash Player cannot be started');
     assert.ok(registry.get('problem').textContent.includes('Flash Player files were changed'), registry.get('problem').textContent);
     assert.ok(registry.get('problem').textContent.includes('Reinstall the launcher to play'));
     assert.strictEqual(registry.get('problem').className, 'problem bad');
 
-    // A broken Flash Player leaves a ready AIR engine playable.
-    render(baseState({ ...ARMED_FLASH, armed: false, locked: true, tampered: true }, IDLE_SOCIAL, { air: READY_AIR }));
-    assert.strictEqual(registry.get('play').disabled, true);
-    assert.strictEqual(registry.get('play-air').disabled, false);
-
-    // A missing one is what stops the main button.
+    // A missing one is what stops the button.
     render(baseState({ ...MISSING_FLASH, locked: true }, IDLE_SOCIAL));
     assert.strictEqual(registry.get('play').disabled, true);
     assert.strictEqual(registry.get('problem').className, 'problem bad');
@@ -334,30 +321,24 @@ async function checkPlayButtons(render, registry, plays) {
     assert.ok(registry.get('problem').textContent.includes('Flash Player is missing'));
     render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL), serverReachable: false });
     assert.strictEqual(registry.get('problem').textContent, 'Could not reach http://example.test/');
-    // An unreachable server outranks a tampered AIR engine.
-    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { air: { found: true, ready: false, tampered: true } }), serverReachable: false });
-    assert.strictEqual(registry.get('problem').textContent, 'Could not reach http://example.test/');
 
-    // A failed play says why, and both buttons come back.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { air: READY_AIR }));
+    // A failed play says why, and the button comes back.
+    render(AIR_BUILD);
     const launcher = registry.launcher;
     const play = launcher.play;
-    launcher.play = async () => ({ ok: false, message: 'Flash Player could not be started: ENOENT' });
+    launcher.play = async () => ({ ok: false, message: 'AIR could not be started: ENOENT' });
     await press('play');
     launcher.play = play;
-    assert.strictEqual(registry.get('problem').textContent, 'Flash Player could not be started: ENOENT');
+    assert.strictEqual(registry.get('problem').textContent, 'AIR could not be started: ENOENT');
     assert.strictEqual(registry.get('play').disabled, false, 'the button comes back for another try');
-    assert.strictEqual(registry.get('play-air').disabled, false);
 
-    // The status line while the game runs: AIR is named; Legacy reads as in 1.6.0.
-    for (const gameEngine of [undefined, '', 'projector', 'ruffle', 'flashbrowser']) {
-        render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL), gameEngine, gameRunning: true });
+    // The status line while the game runs names no engine.
+    for (const gameEngine of [undefined, '', 'projector', 'air']) {
+        render({ ...AIR_BUILD, gameEngine, gameRunning: true });
         assert.strictEqual(registry.get('status').textContent, 'The game is running.');
     }
-    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { air: READY_AIR }), gameEngine: 'air', gameRunning: true });
-    assert.strictEqual(registry.get('status').textContent, 'The game is running (AIR).');
 
-    console.log('[test-launcher-status] Legacy is the main button, AIR a second one where the build has it: OK');
+    console.log('[test-launcher-status] one play button, the build\'s own engine: OK');
 }
 
 /** While a sign-in waits on the browser, its link can be copied -- and only then. */

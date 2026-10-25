@@ -214,10 +214,10 @@ function openDamageMeter() {
 // script would have: rich presence and region latency (lib/gameHost.js). The AIR engine too.
 const gameHost = new GameHost({ presence });
 
-// The two game engines. Legacy -- Adobe's standalone Flash Player 32 (lib/projector.js), in its
-// own process and window -- is the main button and the default. AIR -- the game in Adobe AIR's
-// runtime (lib/airEngine.js) -- is the second button, where the build carries its bundle.
-const ENGINES = ['projector', 'air'];
+// The game engine: one per build, never a choice. A build that carries the AIR engine -- the game
+// in Adobe AIR's runtime (lib/airEngine.js), Windows x64 and macOS -- plays in it alone, and has no
+// Flash Player in it. The builds AIR has no runtime for (Windows 32-bit, the Windows 7 build,
+// Linux) carry Adobe's standalone Flash Player 32 instead (lib/projector.js), as Legacy did.
 
 let launcherWindow = null;
 // The program running the game -- AIR or the standalone Flash Player -- and which
@@ -287,24 +287,22 @@ function airReady() {
 function airProblem() {
     if (!airApp) {
         return app.isPackaged
-            ? 'The AIR engine is not part of this install. Play Legacy instead.'
-            : 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set, or play Legacy.';
+            ? 'The AIR engine is not part of this install. Reinstall the launcher to play.'
+            : 'The AIR engine is missing. Run `npm run build-air` with AIR_SDK_HOME set.';
     }
     if (airApp.tampered) {
-        return `${airApp.tamperReason}. Reinstall the launcher, or play Legacy.`;
+        return `${airApp.tamperReason}. Reinstall the launcher to play.`;
     }
     return '';
 }
 
 /**
- * The engine a plain "play" uses -- the main button, the start-up play of a remembered player,
- * and the play after a sign-in: AIR if the player last picked it with its button and it
- * can run here; otherwise Legacy, the default. A saved value naming any other engine is never
- * read (lib/config.js), so it lands on Legacy too.
+ * The engine every play uses: AIR wherever the build carries it -- even one whose files were
+ * changed, which then says so rather than falling back -- and Flash Player only in a build with
+ * no AIR engine that has one. With neither it is AIR, the engine a current build is missing.
  */
 function preferredEngine() {
-    const chosen = state.read().chosenEngine;
-    if (chosen === 'air' && airReady()) {
+    if (airApp || !projector) {
         return 'air';
     }
     return 'projector';
@@ -318,7 +316,7 @@ function engineProblem(engine) {
     return flashPlayerProblem();
 }
 
-/** Why the standalone Flash Player (Legacy) cannot start the game right now, or '' when it can. */
+/** Why the standalone Flash Player cannot start the game right now, or '' when it can. */
 function flashPlayerProblem() {
     if (!projector) {
         return 'Flash Player is missing. Choose the standalone Flash Player (flashplayer_32_sa) by hand.';
@@ -351,6 +349,11 @@ function locateAirApp() {
 function findFlashPlayer() {
     airApp = locateAirApp();
     console.log(airApp ? `[AIR] ${airApp.executable}${airApp.tampered ? ` REFUSED: ${airApp.tamperReason}` : ''}` : '[AIR] No AIR engine in this build.');
+    // A build with the AIR engine plays nothing else, so Flash Player is not even looked for.
+    if (airApp) {
+        projector = null;
+        return;
+    }
     projector = locateProjector(state.read().projectorPath);
     if (!projector) {
         console.log('[Flash] No standalone Flash Player found; the launcher will ask for one.');
@@ -408,13 +411,13 @@ function buildIsPlayable() {
 function refuseToStart() {
     const vendored = findVendoredProjector();
     const detail = [
-        'This copy of the launcher has no Flash Player, so the game could not start even after signing in.',
+        'This copy of the launcher has no game engine (AIR or Flash Player), so the game could not start even after signing in.',
         '',
         `Running from: ${app.getAppPath()}`,
         'This is an incomplete or outdated build.',
         '',
-        'Fix: install the current build again from the .dmg or .zip, or in a development',
-        'checkout run `npm run fetch-projector` and start it there.',
+        'Fix: install the current build again from the installer, or in a development',
+        'checkout run `npm run build-air` (or `npm run fetch-projector`) and start it there.',
         '',
         'To start anyway (a deliberately Flash-less build), set DUNGEON_BLITZ_ALLOW_NO_FLASH=1.'
     ].join('\n');
@@ -838,8 +841,8 @@ async function launchProjector(serverUrl, settings) {
 }
 
 /**
- * Opens the game in the AIR engine: the SWF from the server, in AIR's runtime and window. Like
- * Legacy, the page's script does not run there, so lib/gameHost.js does its work.
+ * Opens the game in the AIR engine: the SWF from the server, in AIR's runtime and window. The
+ * page's script does not run there, so lib/gameHost.js does its work.
  *
  * @returns {Promise<{ ok: boolean, message?: string }>}
  */
@@ -850,7 +853,7 @@ async function launchAir(serverUrl, settings) {
             airApp.tampered = true;
             airApp.tamperReason = check.reason;
             console.log(`[AIR] REFUSED: ${check.reason}`);
-            return { ok: false, message: `${check.reason}. Reinstall the launcher, or play Legacy.` };
+            return { ok: false, message: `${check.reason}. Reinstall the launcher to play.` };
         }
     }
     const swfUrl = await resolveSwfUrl(serverUrl);
@@ -880,12 +883,9 @@ function stopGameProcess() {
 }
 
 /**
- * @param {{ engine?: string, serverId?: string }} [options] `engine` is the button the player
- *   pressed ('projector' for Legacy, or 'air'), and is remembered for the next plain
- *   play; without it the preferred engine runs -- Legacy, unless the player last picked
- *   AIR and it can run here.
+ * @param {{ serverId?: string }} [options] The game runs in the build's engine (preferredEngine).
  */
-async function play({ engine: requested = '', serverId = '' } = {}) {
+async function play({ serverId = '' } = {}) {
     if (gameProcess) {
         // The game's window is its own program's; it is already open.
         return { ok: true };
@@ -900,14 +900,13 @@ async function play({ engine: requested = '', serverId = '' } = {}) {
         return { ok: false, message: 'No servers configured. Check servers.json.' };
     }
 
-    const chosen = ENGINES.includes(requested);
-    const engine = chosen ? requested : preferredEngine();
+    const engine = preferredEngine();
     const problem = engineProblem(engine);
     if (problem) {
         return { ok: false, message: problem };
     }
 
-    state.write(chosen ? { serverId: selected.id, chosenEngine: engine } : { serverId: selected.id });
+    state.write({ serverId: selected.id });
 
     // Before Flash Player starts, not after: the server signs the game's first connection
     // in from a pending hand-off, and the point of the saved token is that there is already
@@ -1438,8 +1437,6 @@ function registerIpc() {
         return gameStatsSummary();
     });
 
-    // The renderer names the button that was pressed -- 'projector' (Legacy, the main button)
-    // or 'air'; anything else is a plain play of the preferred engine.
     ipcMain.handle('launcher:setGraphics', (_event, settings) => {
         const patch = {};
         if (settings && settings.renderer !== undefined) {
@@ -1451,7 +1448,8 @@ function registerIpc() {
         state.write(patch);
         return launcherState();
     });
-    ipcMain.handle('launcher:play', (_event, engine) => play({ engine: typeof engine === 'string' ? engine : '' }));
+    // One play button: the build's own engine runs, whatever the window names.
+    ipcMain.handle('launcher:play', () => play());
     ipcMain.handle('launcher:damageMeterOpen', () => openDamageMeter());
     ipcMain.handle('launcher:quit', () => app.quit());
 }
