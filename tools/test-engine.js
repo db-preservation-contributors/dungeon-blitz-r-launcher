@@ -275,29 +275,31 @@ async function checkWithoutEngines() {
     report('[test-engine] without AIR or Flash Player nothing starts: OK');
 }
 
-/** A build with the AIR engine plays AIR and nothing else: Flash Player is not even looked for. */
+/** A build with the AIR engine plays AIR, and Flash Player only from the Legacy button. */
 async function checkAir() {
-    // A checkout can hold both; the AIR build never reaches for the Flash Player.
     installedProjector = FAKE_PROJECTOR;
     startLauncher({ air: FAKE_AIR });
     const state = await invoke('launcher:getState');
     checkState(state, { found: true, ready: true, tampered: false });
     assert.strictEqual(state.engine, 'air', 'AIR is the engine');
-    assert.strictEqual(state.flash.found, false, 'no Flash Player is reported in an AIR build');
+    assert.strictEqual(state.flash.found, true, 'Flash Player is reported for the Legacy button');
 
     for (const saved of ['projector', 'air', ...UNKNOWN_ENGINES]) {
         seedState({ chosenEngine: saved, engine: 'flashbrowser' });
-        for (const requested of [undefined, 'projector', 'air']) {
+        for (const requested of [undefined, 'air', 'ruffle']) {
             const play = await playOnce(requested);
             assert.deepStrictEqual(play.result, { ok: true });
             assert.strictEqual(play.engine, 'air', `saved ${saved}, asked for ${requested}: AIR starts`);
             assert.strictEqual(play.started.command, FAKE_AIR.executable, 'the AIR bundle is what starts');
             assert.strictEqual(play.started.args[0], SWF_URL, 'on the game SWF');
         }
+        const legacy = await playOnce('projector');
+        assert.deepStrictEqual(legacy.result, { ok: true });
+        assert.strictEqual(legacy.engine, 'projector', `saved ${saved}: Legacy starts Flash Player`);
         const after = savedState();
         assert.ok(!('chosenEngine' in after) && !('engine' in after), 'the old engine picks are dropped on the next write');
     }
-    report('[test-engine] an AIR build plays AIR alone, whatever was saved or asked for: OK');
+    report('[test-engine] an AIR build plays AIR, and Flash Player from Legacy: OK');
 }
 
 /** A build AIR has no runtime for (ia32, Windows 7, Linux) plays its Flash Player. */

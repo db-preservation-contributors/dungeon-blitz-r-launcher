@@ -27,9 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Only the builds AIR has no runtime for carry Flash Player: Windows ia32 and Windows 7,
-          # and Linux. The macOS build plays in AIR alone.
           - { os: windows-latest, platform: win32, label: Windows }
+          - { os: macos-15-intel, platform: darwin, label: macOS }
           - { os: ubuntu-22.04, platform: linux, label: Linux }
     steps:
       - name: Checkout

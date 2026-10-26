@@ -310,6 +310,27 @@ button:focus-visible {
   gap: 4px;
 }
 
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-reveal {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.account-reveal:hover,
+.account-reveal.on {
+  color: var(--text);
+}
+
 .account-name {
   color: var(--text);
   font-size: 13px;

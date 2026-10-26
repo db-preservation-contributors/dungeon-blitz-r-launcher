@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('launcher', {
     submitLoginCode: (code) => ipcRenderer.invoke('launcher:submitLoginCode', code),
     forgetDiscordLogin: () => ipcRenderer.invoke('launcher:forgetDiscordLogin'),
     // The game in the build's own engine.
-    play: () => ipcRenderer.invoke('launcher:play'),
+    play: (engine) => ipcRenderer.invoke('launcher:play', engine),
     browseFlash: () => ipcRenderer.invoke('launcher:browseFlash'),
     moveToApplications: () => ipcRenderer.invoke('launcher:moveToApplications'),
     relaunch: () => ipcRenderer.invoke('launcher:relaunch'),

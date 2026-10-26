@@ -365,11 +365,6 @@ function locateAirApp() {
 function findFlashPlayer() {
     airApp = locateAirApp();
     console.log(airApp ? `[AIR] ${airApp.executable}${airApp.tampered ? ` REFUSED: ${airApp.tamperReason}` : ''}` : '[AIR] No AIR engine in this build.');
-    // A build with the AIR engine plays nothing else, so Flash Player is not even looked for.
-    if (airApp) {
-        projector = null;
-        return;
-    }
     projector = locateProjector(state.read().projectorPath);
     if (!projector) {
         console.log('[Flash] No standalone Flash Player found; the launcher will ask for one.');
@@ -992,7 +987,7 @@ async function joinDevServer(address) {
 /**
  * @param {{ serverId?: string }} [options] The game runs in the build's engine (preferredEngine).
  */
-async function play({ serverId = '' } = {}) {
+async function play({ engine: requested = '', serverId = '' } = {}) {
     if (gameProcess) {
         // The game's window is its own program's; it is already open.
         return { ok: true };
@@ -1007,7 +1002,7 @@ async function play({ serverId = '' } = {}) {
         return { ok: false, message: 'No servers configured. Check servers.json.' };
     }
 
-    const engine = preferredEngine();
+    const engine = requested === 'projector' && projector ? 'projector' : preferredEngine();
     const problem = engineProblem(engine);
     if (problem) {
         return { ok: false, message: problem };
@@ -1556,7 +1551,7 @@ function registerIpc() {
         return launcherState();
     });
     // One play button: the build's own engine runs, whatever the window names.
-    ipcMain.handle('launcher:play', () => play());
+    ipcMain.handle('launcher:play', (_event, engine) => play({ engine: engine === 'projector' ? 'projector' : '' }));
 
     // Developer mode. Every call but the switch itself does nothing while it is off.
     const devOnly = (handler) => (...args) =>

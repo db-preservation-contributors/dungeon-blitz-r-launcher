@@ -1,6 +1,6 @@
 {
   "name": "dungeon-blitz-r-launcher",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "private": true,
   "description": "Dungeon Blitz: R launcher that runs the game in Adobe AIR (Adobe's standalone Flash Player where AIR has no runtime)",
   "homepage": "https://theminesa.studio",
@@ -24,11 +24,11 @@
     "dist:win7:ia32": "electron-builder --win nsis:ia32 portable:ia32 --config build/win7.config.js",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux",
-    "predist:win": "node tools/preflight.js --platform win32 --arch x64 --engine air",
+    "predist:win": "node tools/fetch-projector.js --platform win32 && node tools/preflight.js --platform win32 --arch x64 --engine air",
     "predist:win:ia32": "node tools/fetch-projector.js --platform win32 && node tools/preflight.js --platform win32 --arch ia32",
     "predist:win7": "node tools/fetch-projector.js --platform win32 && node tools/preflight.js --platform win32 --arch x64",
     "predist:win7:ia32": "node tools/fetch-projector.js --platform win32 && node tools/preflight.js --platform win32 --arch ia32",
-    "predist:mac": "node tools/preflight.js --platform darwin --engine air",
+    "predist:mac": "node tools/fetch-projector.js --platform darwin && node tools/preflight.js --platform darwin --engine air",
     "predist:linux": "node tools/fetch-projector.js --platform linux && node tools/build-flash-preload.js --platform linux && node tools/preflight.js --platform linux",
     "build:bridge": "cmake -S native_bridge -B native_bridge/build -DCMAKE_BUILD_TYPE=Release && cmake --build native_bridge/build --config Release"
   },

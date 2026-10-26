@@ -6,9 +6,8 @@
  * runs: one engine per build (main.js preferredEngine).
  *
  * --engine air (Windows x64, macOS): the AIR engine bundle tools/build-air.js made, matching its
- * fingerprint -- and NO Flash Player. vendor/ is packaged by platform, not by build, so a
- * flashplayer left in vendor/projector/<platform> from an ia32 or Windows 7 build would ship in the
- * AIR package; that fails the build instead.
+ * fingerprint, plus the standalone
+ * Flash Player for the Legacy button.
  *
  * --engine flash (the default: Windows ia32, Windows 7, Linux, which AIR has no runtime for): the
  * standalone Flash Player (flashplayer_32_sa) in vendor/projector/. A package without it runs,
@@ -74,9 +73,9 @@ function parseEngine(argv) {
 
 /**
  * An AIR package: the bundle tools/build-air.js made, with the fingerprint an installed launcher
- * checks before every game -- and no Flash Player beside it.
+ * checks before every game, and Flash Player beside it for Legacy.
  */
-function checkAir(platform) {
+function checkAir(platform, arch) {
     let ok = true;
     const air = airAppInDirectory(path.join(AIR_ROOT, platform), platform);
     if (!air) {
@@ -98,12 +97,8 @@ function checkAir(platform) {
         }
     }
 
-    const flash = projectorInDirectory(path.join(PROJECTOR_ROOT, platform), platform);
-    if (flash) {
-        console.error('');
-        console.error(`[preflight] ERROR: ${flash} would ship in this AIR package, which carries no Flash Player.`);
-        console.error(`[preflight] Delete ${path.join(PROJECTOR_ROOT, platform)} (fetch it again for an ia32 or Windows 7 build).`);
-        console.error('');
+    // The Legacy button: Flash Player ships beside AIR.
+    if (!checkProjector(platform, arch)) {
         ok = false;
     }
     return ok;
@@ -223,7 +218,7 @@ function main() {
 
     // Both run either way, so fixing one failure does not hide the other.
     const filesOk = checkPackagedFiles();
-    const engineOk = engine === 'air' ? checkAir(platform) : checkProjector(platform, arch);
+    const engineOk = engine === 'air' ? checkAir(platform, arch) : checkProjector(platform, arch);
     if (!filesOk || !engineOk) {
         process.exit(1);
     }

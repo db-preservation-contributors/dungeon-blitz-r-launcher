@@ -260,6 +260,11 @@ async function checkPlayButtons(render, registry, plays) {
     plays.length = 0;
     await press('play');
     assert.deepStrictEqual(plays, ['play'], 'the button names no engine');
+    render({ ...baseState(ARMED_FLASH, IDLE_SOCIAL, { air: READY_AIR }), engine: 'air' });
+    assert.strictEqual(registry.get('play-legacy').hidden, false, 'Legacy is offered beside AIR');
+    plays.length = 0;
+    await press('play-legacy');
+    assert.deepStrictEqual(plays, ['play(projector)'], 'Legacy plays Flash Player');
 
     // Its AIR engine missing, or changed after installation: refused, and said so.
     render({ ...AIR_BUILD, air: NO_AIR, flash: { ...MISSING_FLASH, locked: true } });
@@ -641,7 +646,7 @@ async function main() {
             discord: { linked: true, email: 'player@example.test', name: '', remembered: true, loginPending: false }
         })
     );
-    assert.strictEqual(registry.get('account-name').textContent, 'Signed in as player@example.test');
+    assert.strictEqual(registry.get('account-name').textContent, 'Signed in as pl•••••@example.test');
 
     render(baseState(ARMED_FLASH, IDLE_SOCIAL));
     assert.strictEqual(registry.get('discord-login').hidden, false, 'a fresh install still offers the button');
