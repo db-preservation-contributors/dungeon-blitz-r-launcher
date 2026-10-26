@@ -56,11 +56,15 @@
       <!-- The play button: the game in the build's engine -- Adobe AIR, or the standalone Flash
            Player in the builds AIR has no runtime for. -->
       <button id="play" type="button" class="db-play">Open the game</button>
+      <button id="play-legacy" type="button" class="db-play-alt" hidden>Legacy</button>
 
       <!-- Signing in is a one-time thing: once an account is known the button is replaced by
            it, whether the sign-in happened here or inside the game. -->
       <div id="account" class="account" hidden>
-        <span id="account-name" class="account-name"></span>
+        <div class="account-row">
+          <span id="account-name" class="account-name"></span>
+          <button id="account-reveal" type="button" class="account-reveal" title="Show email" hidden>&#128065;</button>
+        </div>
         <button id="forget" type="button" class="link quiet">Use a different account</button>
       </div>
     </section>

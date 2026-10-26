@@ -8,6 +8,8 @@ const elements = {
     loginCodeSubmit: document.getElementById('login-code-submit'),
     loginCodeError: document.getElementById('login-code-error'),
     play: document.getElementById('play'),
+    playLegacy: document.getElementById('play-legacy'),
+    accountReveal: document.getElementById('account-reveal'),
     status: document.getElementById('status'),
     problem: document.getElementById('problem'),
     repair: document.getElementById('repair'),
@@ -287,12 +289,20 @@ function playButtons(state) {
     const flash = state.flash || {};
     const air = state.air || {};
     const ready = engine === 'air' ? Boolean(air.ready) : Boolean(flash.armed && !flash.archMismatch);
-    return { engine, playable: ready && hasServers };
+    const legacyReady = Boolean(flash.armed && !flash.archMismatch);
+    return {
+        engine,
+        playable: ready && hasServers,
+        legacyOffered: engine === 'air' && Boolean(flash.found),
+        legacyPlayable: legacyReady && hasServers
+    };
 }
 
 function applyPlayButtons(state) {
     const buttons = playButtons(state);
     elements.play.disabled = !buttons.playable;
+    elements.playLegacy.hidden = !buttons.legacyOffered;
+    elements.playLegacy.disabled = !buttons.legacyPlayable;
     return buttons;
 }
 
@@ -378,13 +388,28 @@ function statusLine(state) {
     return 'Sign in with Discord to play.';
 }
 
-function accountLabel(discord) {
+let emailRevealed = false;
+
+function maskEmail(email) {
+    const at = email.indexOf('@');
+    if (at < 1) {
+        return '•••••';
+    }
+    return `${email.slice(0, Math.min(2, at))}•••••${email.slice(at)}`;
+}
+
+function accountEmail(discord) {
+    const name = String((discord && discord.name) || '').trim();
+    return name ? '' : String((discord && discord.email) || '').trim();
+}
+
+function accountLabel(discord, reveal = false) {
     const name = String((discord && discord.name) || '').trim();
     if (name) {
         return `Signed in as ${name}`;
     }
-    const email = String((discord && discord.email) || '').trim();
-    return email ? `Signed in as ${email}` : 'Signed in';
+    const email = accountEmail(discord);
+    return email ? `Signed in as ${reveal ? email : maskEmail(email)}` : 'Signed in';
 }
 
 /**
@@ -461,7 +486,10 @@ function render(state) {
     elements.loginCode.hidden = !askCode;
     elements.loginCodeError.hidden = !(askCode && state.discord.loginCodeRejected);
     elements.account.hidden = !state.discord.remembered;
-    elements.accountName.textContent = accountLabel(state.discord);
+    elements.accountName.textContent = accountLabel(state.discord, emailRevealed);
+    elements.accountReveal.hidden = !accountEmail(state.discord);
+    elements.accountReveal.className = emailRevealed ? 'account-reveal on' : 'account-reveal';
+    elements.accountReveal.title = emailRevealed ? 'Hide email' : 'Show email';
     applyPlayButtons(state);
     // Flash Player is started fresh for every game, so a new choice never needs a restart.
     elements.relaunch.hidden = true;
@@ -538,14 +566,30 @@ elements.discordLogin.addEventListener('click', async () => {
     }
 });
 
-elements.play.addEventListener('click', async () => {
+async function playWith(engine) {
     elements.play.disabled = true;
-    const result = await window.launcher.play();
+    elements.playLegacy.disabled = true;
+    const result = await (engine ? window.launcher.play(engine) : window.launcher.play());
     if (!result || !result.ok) {
         showProblem((result && result.message) || 'Could not start the game.', 'bad');
     }
     if (currentState) {
         applyPlayButtons(currentState);
+    }
+}
+
+elements.play.addEventListener('click', () => {
+    void playWith();
+});
+
+elements.playLegacy.addEventListener('click', () => {
+    void playWith('projector');
+});
+
+elements.accountReveal.addEventListener('click', () => {
+    emailRevealed = !emailRevealed;
+    if (currentState) {
+        render(currentState);
     }
 });
 
