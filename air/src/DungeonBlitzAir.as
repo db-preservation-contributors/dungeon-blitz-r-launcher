@@ -4,11 +4,14 @@ package
    import flash.display.Loader;
    import flash.display.Sprite;
    import flash.display.StageAlign;
+   import flash.display.StageDisplayState;
    import flash.display.StageScaleMode;
    import flash.events.ErrorEvent;
    import flash.events.Event;
+   import flash.events.FullScreenEvent;
    import flash.events.IOErrorEvent;
    import flash.events.InvokeEvent;
+   import flash.events.KeyboardEvent;
    import flash.events.SecurityErrorEvent;
    import flash.events.UncaughtErrorEvent;
    import flash.net.URLLoader;
@@ -19,6 +22,7 @@ package
    import flash.text.TextField;
    import flash.text.TextFieldAutoSize;
    import flash.text.TextFormat;
+   import flash.ui.Keyboard;
 
    /**
     * The AIR engine: Dungeon Blitz in Adobe AIR's runtime instead of Flash Player 32.
@@ -28,6 +32,9 @@ package
     * as the game's flashvars. The game's own AirCompat (the server's
     * scripts/patch-dungeonblitz-air-compat.ts) loads its level and art SWFs the same way, so the
     * whole client shares one sandbox, as it does in Flash Player.
+    *
+    * The standard window chrome has no full-screen button on Windows (macOS has its green one), so
+    * F11 and Alt+Enter toggle full screen, and the game is scaled up to fill it, centred.
     */
    [SWF(width="1152", height="768", backgroundColor="#484955", frameRate="60")]
    public class DungeonBlitzAir extends Sprite
@@ -37,6 +44,7 @@ package
       private var started:Boolean = false;
       private var status:TextField;
       private var gameUrl:String = "";
+      private var game:Loader;
 
       public function DungeonBlitzAir()
       {
@@ -54,6 +62,10 @@ package
          status.x = 24;
          status.y = 24;
          addChild(status);
+         // Capture phase, so the key still toggles while the game's own input has focus.
+         stage.addEventListener(KeyboardEvent.KEY_DOWN, onKeyDown, true, 1000);
+         stage.addEventListener(Event.RESIZE, fitGame);
+         stage.addEventListener(FullScreenEvent.FULL_SCREEN, fitGame);
          NativeApplication.nativeApplication.addEventListener(InvokeEvent.INVOKE, onInvoke);
       }
 
@@ -105,11 +117,54 @@ package
          context.allowCodeImport = true;
          context.parameters = flashVars(gameUrl);
          var loader:Loader = new Loader();
+         game = loader;
          // Release Flash Player shows nothing for an error the game does not catch; neither does this.
          loader.uncaughtErrorEvents.addEventListener(UncaughtErrorEvent.UNCAUGHT_ERROR, onUncaught);
          removeChild(status);
          addChild(loader);
          loader.loadBytes(URLLoader(event.target).data, context);
+         fitGame();
+      }
+
+      private function onKeyDown(event:KeyboardEvent) : void
+      {
+         if (event.keyCode == Keyboard.F11 || (event.keyCode == Keyboard.ENTER && event.altKey))
+         {
+            toggleFullScreen();
+         }
+      }
+
+      private function toggleFullScreen() : void
+      {
+         try
+         {
+            // Interactive, or AIR drops the keyboard in full screen and the game cannot be played.
+            stage.displayState = stage.displayState == StageDisplayState.NORMAL ? StageDisplayState.FULL_SCREEN_INTERACTIVE : StageDisplayState.NORMAL;
+         }
+         catch (error:Error)
+         {
+            trace("[DungeonBlitzAir] full screen: " + error.message);
+         }
+      }
+
+      /** Full screen scales the game to the largest size that fits, centred; a window shows it 1:1 at the corner. */
+      private function fitGame(event:Event = null) : void
+      {
+         if (!game)
+         {
+            return;
+         }
+         var fill:Number = 1;
+         game.x = 0;
+         game.y = 0;
+         if (stage.displayState != StageDisplayState.NORMAL)
+         {
+            fill = Math.min(stage.stageWidth / 1152, stage.stageHeight / 768);
+            game.x = Math.round((stage.stageWidth - 1152 * fill) / 2);
+            game.y = Math.round((stage.stageHeight - 768 * fill) / 2);
+         }
+         game.scaleX = fill;
+         game.scaleY = fill;
       }
 
       private function onUncaught(event:UncaughtErrorEvent) : void
