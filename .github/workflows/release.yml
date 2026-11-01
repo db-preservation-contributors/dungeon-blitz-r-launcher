@@ -101,22 +101,32 @@ jobs:
           # run per architecture, like the main build, and neither publishes an update
           # manifest: latest.yml must keep naming the main x64 setup. Installed Windows 7
           # launchers get the update notice for their own files instead (lib/updateNotice.js).
-          - os: windows-latest
+          #
+          # Not allowed to fail: the main setup refuses Windows 7, 8 and 8.1 and sends those
+          # players to these files (build/installer.nsh), so a release without them is a dead
+          # end. 1.10.0 to 1.11.1 shipped that way: allowed to fail, these jobs died in the
+          # smoke launch (Electron 22's GPU process crashes on the GPU-less hosted runners)
+          # and nobody saw it. They start with the GPU off (`smoke_args`) instead.
+          #
+          # On windows-2022, not windows-latest: Electron 22's GPU and renderer processes crash
+          # (0xC0000005) on the windows-2025 image from 20261021 on, GPU off or not; 20261002
+          # still ran them. That is the runner's Windows, not Windows 7, which gets no updates.
+          - os: windows-2022
             platform: win32
             arch: x64
             flavor: win7
             label: Windows 7 x64
             builder_args: --win nsis:x64 portable:x64 --config build/win7.config.js
             publish_mode: never
-            allow_fail: true
-          - os: windows-latest
+            smoke_args: --disable-gpu --disable-gpu-compositing
+          - os: windows-2022
             platform: win32
             arch: ia32
             flavor: win7
             label: Windows 7 ia32
             builder_args: --win nsis:ia32 portable:ia32 --config build/win7.config.js
             publish_mode: never
-            allow_fail: true
+            smoke_args: --disable-gpu --disable-gpu-compositing
           # An Intel runner: the package is x64 (Apple Silicon runs it, and Flash Player, which
           # is Intel-only, under Rosetta). macos-13 was retired, and a retired label does not
           # fail -- the job simply queues forever.
@@ -126,9 +136,8 @@ jobs:
             air: true
             builder_args: --mac
             publish_mode: always
-          # Linux and the Windows 7 builds (Electron 22's GPU process crashes on the hosted
-          # runners) are allowed to fail so that one platform cannot stop the Windows and macOS
-          # installers from publishing; a failure is still visible on the run page.
+          # Linux is allowed to fail so that it cannot stop the Windows and macOS installers
+          # from publishing; a failure is still visible on the run page.
           - os: ubuntu-22.04
             platform: linux
             label: Linux
@@ -310,7 +319,8 @@ jobs:
             win32) exe="$(find dist -maxdepth 2 -path '*unpacked/Dungeon Blitz R.exe' | head -1)" ;;
           esac
           test -n "$exe" || { echo "the packaged launcher is missing"; exit 1; }
-          node tools/smoke-launch.js "$exe" --seconds 20
+          # shellcheck disable=SC2086 -- smoke_args is a list of switches, split on purpose.
+          node tools/smoke-launch.js "$exe" --seconds 20 -- ${{ matrix.smoke_args }}
 
       - name: Mark the draft release as not to be published
         # electron-builder has already uploaded this job's installers to the draft. A draft from a
