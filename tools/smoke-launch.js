@@ -13,24 +13,34 @@
  * It fails when the launcher exits early or logs a FATAL line, and prints what it logged either
  * way.
  *
- * Usage: node tools/smoke-launch.js <launcher executable> [--seconds 20]
+ * Usage: node tools/smoke-launch.js <launcher executable> [--seconds 20] [-- <launcher arguments>]
+ *
+ * Arguments after `--` go to the launcher itself. The Windows 7 build is started with
+ * `--disable-gpu --disable-gpu-compositing`: GitHub's Windows runners have no GPU, and Electron
+ * 22's GPU process crashes there until Chromium gives up ("GPU process isn't usable. Goodbye.").
+ * That took the win7 installers off every release from 1.10.0 to 1.11.1, while the installer
+ * kept sending Windows 7 players to them. Those switches only change how the launcher's own
+ * window is drawn; what this checks -- that the package starts and stays up -- is the same.
  */
 
 const { spawn, execFileSync } = require('child_process');
 
-const args = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const separator = argv.indexOf('--');
+const args = separator >= 0 ? argv.slice(0, separator) : argv;
+const launcherArgs = separator >= 0 ? argv.slice(separator + 1) : [];
 const executable = args.find((arg) => !arg.startsWith('--'));
 const secondsIndex = args.indexOf('--seconds');
 const seconds = secondsIndex >= 0 ? Number(args[secondsIndex + 1]) || 20 : 20;
 
 if (!executable) {
-    console.error('Usage: node tools/smoke-launch.js <launcher executable> [--seconds 20]');
+    console.error('Usage: node tools/smoke-launch.js <launcher executable> [--seconds 20] [-- <launcher arguments>]');
     process.exit(1);
 }
 
 let output = '';
 let exited = null;
-const child = spawn(executable, [], {
+const child = spawn(executable, launcherArgs, {
     stdio: ['ignore', 'pipe', 'pipe'],
     // Its own process group off Windows, so the launcher and anything it starts can be stopped.
     detached: process.platform !== 'win32',
@@ -64,7 +74,7 @@ function stop() {
 setTimeout(() => {
     const fatal = output.split(/\r?\n/).filter((line) => /FATAL/.test(line));
     stop();
-    console.log(`[smoke-launch] ${executable}`);
+    console.log(`[smoke-launch] ${[executable, ...launcherArgs].join(' ')}`);
     console.log('[smoke-launch] --- what it logged ---');
     console.log(output.trim() || '(nothing)');
     console.log('[smoke-launch] ---');

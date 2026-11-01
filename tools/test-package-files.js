@@ -123,6 +123,35 @@ function main() {
         assert.strictEqual(new Set(named).size, 1, `one run must build exactly one architecture, got "${args}"`);
     }
 
+    // The main setup refuses Windows 7, 8 and 8.1 and sends those players to the win7 files
+    // (build/installer.nsh), so a release without them is a dead end. 1.10.0 to 1.11.1 shipped
+    // that way: the win7 jobs were allowed to fail, died in the smoke launch because Electron 22's
+    // GPU process crashes on the GPU-less hosted runners, and the release went out without them.
+    const matrixEntries = workflow.split(/\n\s*- os: /).slice(1);
+    const win7Entries = matrixEntries.filter((entry) => entry.includes(WIN7_CONFIG));
+    assert.strictEqual(win7Entries.length, 2, 'two Windows 7 matrix entries');
+    for (const entry of win7Entries) {
+        assert.ok(!/allow_fail:\s*true/.test(entry), 'a Windows 7 build must not be allowed to fail');
+        assert.match(entry, /smoke_args:\s*--disable-gpu --disable-gpu-compositing/, 'a Windows 7 build is smoke-launched with the GPU off');
+    }
+    assert.match(
+        workflow,
+        /node tools\/smoke-launch\.js "\$exe" --seconds \d+ -- \$\{\{ matrix\.smoke_args \}\}/,
+        'the smoke launch passes the matrix entry\'s launcher arguments'
+    );
+    // And smoke-launch hands them to the launcher: a stand-in that prints its arguments.
+    const smoke = require('child_process').spawnSync(process.execPath, [
+        path.join(__dirname, 'smoke-launch.js'),
+        process.execPath,
+        '--seconds', '1',
+        '--',
+        '-e', 'console.log("ARGS " + process.argv.slice(1).join(" ")); setInterval(() => {}, 1000)',
+        // Node's own `--` so the stand-in takes the switch as an argument, not a Node option.
+        '--', '--disable-gpu'
+    ], { encoding: 'utf8' });
+    assert.strictEqual(smoke.status, 0, `smoke-launch with a running stand-in passes:\n${smoke.stdout}\n${smoke.stderr}`);
+    assert.match(smoke.stdout, /ARGS --disable-gpu/, 'smoke-launch passes the arguments after -- to the launcher');
+
     for (const args of windowsRuns) {
         // Exactly one architecture, applied to both targets: mixing them would rebuild the
         // universal installer, and naming neither falls back to build.win.
