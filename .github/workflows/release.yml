@@ -107,7 +107,11 @@ jobs:
           # end. 1.10.0 to 1.11.1 shipped that way: allowed to fail, these jobs died in the
           # smoke launch (Electron 22's GPU process crashes on the GPU-less hosted runners)
           # and nobody saw it. They start with the GPU off (`smoke_args`) instead.
-          - os: windows-latest
+          #
+          # On windows-2022, not windows-latest: Electron 22's GPU and renderer processes crash
+          # (0xC0000005) on the windows-2025 image from 20261021 on, GPU off or not; 20261002
+          # still ran them. That is the runner's Windows, not Windows 7, which gets no updates.
+          - os: windows-2022
             platform: win32
             arch: x64
             flavor: win7
@@ -115,7 +119,7 @@ jobs:
             builder_args: --win nsis:x64 portable:x64 --config build/win7.config.js
             publish_mode: never
             smoke_args: --disable-gpu --disable-gpu-compositing
-          - os: windows-latest
+          - os: windows-2022
             platform: win32
             arch: ia32
             flavor: win7

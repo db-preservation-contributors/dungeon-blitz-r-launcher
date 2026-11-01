@@ -133,6 +133,8 @@ function main() {
     for (const entry of win7Entries) {
         assert.ok(!/allow_fail:\s*true/.test(entry), 'a Windows 7 build must not be allowed to fail');
         assert.match(entry, /smoke_args:\s*--disable-gpu --disable-gpu-compositing/, 'a Windows 7 build is smoke-launched with the GPU off');
+        // Electron 22 crashes on the windows-2025 runner image from 20261021 on, GPU or not.
+        assert.ok(entry.startsWith('windows-2022'), 'a Windows 7 build runs on windows-2022, where Electron 22 still starts');
     }
     assert.match(
         workflow,
