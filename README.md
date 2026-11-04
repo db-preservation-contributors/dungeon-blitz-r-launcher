@@ -1078,6 +1078,10 @@ In Flash Player the window is Flash Player's own, so its shortcuts are Flash Pla
 `Ctrl+F` (`Cmd+F` on macOS) toggles full screen, `Esc` leaves it, and `Ctrl+Q` (`Cmd+Q`)
 closes the game.
 
+In AIR, `F11`, `Alt+Enter`, `Ctrl+F` (`Cmd+F`) and the button in the window's top-right corner
+toggle full screen, and `Esc` leaves it. The game lays itself out to the full screen 1:1, as it
+does in Flash Player, rather than being scaled up (`air/src/DungeonBlitzAir.as`).
+
 ## Security notes
 
 - The launcher shell runs sandboxed, with `contextIsolation: true`,

@@ -36,8 +36,8 @@ package
     * whole client shares one sandbox, as it does in Flash Player.
     *
     * The standard window chrome has no full-screen button on Windows (macOS has its green one), so
-    * F11, Alt+Enter and a small button in the top-right corner toggle full screen, and the game is
-    * scaled up to fill it, centred.
+    * F11, Alt+Enter, Ctrl+F (Cmd+F) and a small button in the top-right corner toggle full screen, and the game
+    * lays itself out to fill it, as in Flash Player's full screen.
     */
    [SWF(width="1152", height="768", backgroundColor="#484955", frameRate="60")]
    public class DungeonBlitzAir extends Sprite
@@ -140,7 +140,9 @@ package
 
       private function onKeyDown(event:KeyboardEvent) : void
       {
-         if (event.keyCode == Keyboard.F11 || (event.keyCode == Keyboard.ENTER && event.altKey))
+         // Ctrl+F (Cmd+F) as well: it is Flash Player's own full-screen key, which players know.
+         if (event.keyCode == Keyboard.F11 || (event.keyCode == Keyboard.ENTER && event.altKey)
+               || (event.keyCode == Keyboard.F && (event.ctrlKey || event.commandKey)))
          {
             toggleFullScreen();
          }
@@ -195,7 +197,12 @@ package
          }
       }
 
-      /** Full screen scales the game to the largest size that fits, centred; a window shows it 1:1 at the corner. */
+      /**
+       * The game is shown 1:1 at the corner, in a window and in full screen alike. It sets the
+       * stage to NO_SCALE itself and lays itself out to the whole stage, as it does in Flash
+       * Player's full screen (Ctrl+F) and in a browser. Scaling it up as well put its full-screen
+       * layout off the edges: about a quarter of the game was off screen.
+       */
       private function fitGame(event:Event = null) : void
       {
          drawFullScreenButton(stage.displayState != StageDisplayState.NORMAL);
@@ -205,17 +212,10 @@ package
          {
             return;
          }
-         var fill:Number = 1;
          game.x = 0;
          game.y = 0;
-         if (stage.displayState != StageDisplayState.NORMAL)
-         {
-            fill = Math.min(stage.stageWidth / 1152, stage.stageHeight / 768);
-            game.x = Math.round((stage.stageWidth - 1152 * fill) / 2);
-            game.y = Math.round((stage.stageHeight - 768 * fill) / 2);
-         }
-         game.scaleX = fill;
-         game.scaleY = fill;
+         game.scaleX = 1;
+         game.scaleY = 1;
       }
 
       private function onUncaught(event:UncaughtErrorEvent) : void
