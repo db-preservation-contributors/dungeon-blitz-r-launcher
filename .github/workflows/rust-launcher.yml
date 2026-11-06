@@ -115,6 +115,10 @@ jobs:
           if [ "${{ matrix.win7 }}" = "true" ]; then
             # Tier-3 targets are not in `rustup target list`, which the Tauri CLI checks, so the
             # binary is built with cargo and bundled as the matching regular Windows target.
+            (cd src-tauri && cargo fetch --locked)
+            arch=x86_64; case "${{ matrix.target }}" in i686-*) arch=i686 ;; esac
+            for d in "$CARGO_HOME"/registry/src/*/windows_${arch}_msvc-*/lib; do RUSTFLAGS="$RUSTFLAGS -L native=$(cygpath -m "$d")"; done
+            export RUSTFLAGS
             (cd src-tauri && cargo build --release --locked --target ${{ matrix.target }} --features win7,custom-protocol -Zbuild-std=std,panic_abort)
             mkdir -p src-tauri/target/${{ matrix.bundle_target }}/release
             cp src-tauri/target/${{ matrix.target }}/release/dungeon-blitz-r-launcher.exe src-tauri/target/${{ matrix.bundle_target }}/release/
