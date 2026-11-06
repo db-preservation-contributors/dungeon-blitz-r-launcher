@@ -7,12 +7,6 @@
       "note": "Resmi sunucu - launcher acilista buraya baglanir"
     },
     {
-      "id": "live-eu",
-      "name": "Live (europe-west1)",
-      "url": "http://35.241.250.170/",
-      "note": "Avrupa VM'i - Turkiye'den us-east1'e gore belirgin dusuk gecikme"
-    },
-    {
       "id": "local",
       "name": "Local (127.0.0.1)",
       "url": "http://127.0.0.1/",
