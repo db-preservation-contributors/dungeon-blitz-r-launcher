@@ -684,6 +684,7 @@ impl Launcher {
             }
             me.live.lock().unwrap().login = None;
             let Some(email) = signed else {
+                me.stats.sign_in_missed();
                 me.push();
                 return;
             };
@@ -695,6 +696,14 @@ impl Launcher {
             let running = me.live.lock().unwrap().game_kill.is_some();
             if !running {
                 me.play("").await;
+            } else if me.stats.snapshot().running {
+                // A sign-in started from Sync game stats: the token just saved is what the
+                // server was missing.
+                if me.token().is_empty() {
+                    me.stats.sign_in_missed();
+                } else {
+                    me.stats.sync(me.token()).await;
+                }
             }
             me.push();
         });
@@ -867,7 +876,19 @@ async fn game_stats_sync(l: S<'_>) -> Result<Value, ()> {
     let l = launcher!(l);
     l.live.lock().unwrap().recovery_last = 0;
     l.refresh_account().await;
-    let mut s = serde_json::to_value(l.stats.sync(l.token()).await).unwrap();
+    let snapshot = if l.token().is_empty() && l.stats.snapshot().running {
+        // Without a device token the server answers 401 to every sync, so sign in first;
+        // discord_login syncs once the token is saved.
+        if l.discord_login().get("ok") == Some(&json!(true)) {
+            l.stats.waiting_for_sign_in();
+            l.stats.snapshot()
+        } else {
+            l.stats.sync(String::new()).await
+        }
+    } else {
+        l.stats.sync(l.token()).await
+    };
+    let mut s = serde_json::to_value(snapshot).unwrap();
     s["enabled"] = json!(!env_off("DUNGEON_BLITZ_GAME_STATS"));
     Ok(s)
 }
@@ -951,7 +972,25 @@ fn warn_install_location(l: L) {
     });
 }
 
+/// Release builds abort on a panic and macOS's crash report has no symbols, so the panic's own
+/// message goes to launcher-crash.log in the data folder before the abort.
+fn log_panics() {
+    let Some(dir) = dirs::config_dir().map(|d| d.join(config::APP_DIRECTORY_NAME)) else { return };
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let line = format!("[{}] v{} {info}\n{backtrace}\n", config::now_ms(), env!("CARGO_PKG_VERSION"));
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("launcher-crash.log")) {
+            use std::io::Write;
+            let _ = file.write_all(line.as_bytes());
+        }
+        default(info);
+    }));
+}
+
 pub fn run() {
+    log_panics();
     if let Some(dir) = dirs::config_dir() {
         let saved = StateStore::new(&dir.join(config::APP_DIRECTORY_NAME)).read();
         if saved.renderer == "cpu" {

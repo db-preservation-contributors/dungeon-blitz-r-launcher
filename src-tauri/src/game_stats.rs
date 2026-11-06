@@ -67,6 +67,27 @@ impl GameStats {
         self.patch(|s| *s = StatsState::default());
     }
 
+    /// No device token: the server cannot tell who is asking, so the launcher's own Discord
+    /// sign-in has to run first. The sync follows it (Launcher::discord_login).
+    pub fn waiting_for_sign_in(&self) {
+        self.patch(|s| {
+            s.state = "signing-in".into();
+            s.written = false;
+            s.last_error = "Finish the Discord sign-in in your browser; game stats sync right after.".into();
+        });
+    }
+
+    /// The sign-in a sync was waiting for ended without a token.
+    pub fn sign_in_missed(&self) {
+        if self.snapshot().state != "signing-in" {
+            return;
+        }
+        self.patch(|s| {
+            s.state = "error".into();
+            s.last_error = "The Discord sign-in did not finish, so there is no account to write. Press Sync game stats to try again.".into();
+        });
+    }
+
     pub async fn sync(&self, token: String) -> StatsState {
         let server = {
             let mut inner = self.inner.lock().unwrap();
