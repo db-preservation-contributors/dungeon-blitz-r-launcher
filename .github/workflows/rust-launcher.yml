@@ -108,6 +108,8 @@ jobs:
         shell: bash
         env:
           RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+          NO_STRIP: true
+          APPIMAGE_EXTRACT_AND_RUN: 1
         run: |
           mkdir -p vendor
           if [ "${{ matrix.win7 }}" = "true" ]; then
@@ -118,7 +120,7 @@ jobs:
             cp src-tauri/target/${{ matrix.target }}/release/dungeon-blitz-r-launcher.exe src-tauri/target/${{ matrix.bundle_target }}/release/
             npx --yes @tauri-apps/cli@2 bundle --target ${{ matrix.bundle_target }} --bundles nsis
           else
-            npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }}
+            npx --yes @tauri-apps/cli@2 build --verbose --target ${{ matrix.target }}
           fi
 
       - name: Name the installers
