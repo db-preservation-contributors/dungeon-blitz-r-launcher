@@ -1,0 +1,141 @@
+name: Rust launcher
+
+on:
+  push:
+    branches: [main]
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', '.github/workflows/rust-launcher.yml']
+  pull_request:
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', '.github/workflows/rust-launcher.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+  build:
+    name: ${{ matrix.label }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, label: Windows x64, platform: win32, target: x86_64-pc-windows-msvc, toolchain: stable, air: true, name: win-x64 }
+          - { os: windows-latest, label: Windows ia32, platform: win32, target: i686-pc-windows-msvc, toolchain: stable, name: win-ia32 }
+          - { os: windows-2022, label: Windows 7 x64, platform: win32, target: x86_64-win7-windows-msvc, toolchain: nightly, win7: true, name: win7-x64 }
+          - { os: windows-2022, label: Windows 7 ia32, platform: win32, target: i686-win7-windows-msvc, toolchain: nightly, win7: true, name: win7-ia32 }
+          - { os: macos-15-intel, label: macOS, platform: darwin, target: x86_64-apple-darwin, toolchain: stable, air: true, name: mac-x64 }
+          - { os: ubuntu-22.04, label: Linux, platform: linux, target: x86_64-unknown-linux-gnu, toolchain: stable, name: linux }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev patchelf
+
+      - name: Set up Rust (stable)
+        if: matrix.toolchain == 'stable'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Set up Rust (nightly, Windows 7 targets are built from source)
+        if: matrix.toolchain == 'nightly'
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Fetch Flash Player
+        if: ${{ !matrix.air }}
+        shell: bash
+        run: node tools/fetch-projector.js --platform ${{ matrix.platform }}
+
+      - name: Build the Flash Player preload
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: node tools/build-flash-preload.js --platform linux
+
+      - name: Set up Java for the AIR SDK
+        if: matrix.air
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build the AIR engine
+        if: matrix.air
+        shell: bash
+        run: |
+          sdk=$(node tools/fetch-air-sdk.js --platform ${{ matrix.platform }} | tail -1)
+          AIR_SDK_HOME="$sdk" node tools/build-air.js
+
+      - name: Check the game engine
+        shell: bash
+        run: |
+          arch=x64
+          case "${{ matrix.target }}" in i686-*) arch=ia32 ;; esac
+          node tools/preflight.js --platform ${{ matrix.platform }} --arch $arch --engine ${{ matrix.air && 'air' || 'flash' }}
+
+      - name: Build installers
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          mkdir -p vendor
+          if [ "${{ matrix.win7 }}" = "true" ]; then
+            npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --features win7 -- -Zbuild-std=std,panic_abort
+          else
+            npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }}
+          fi
+
+      - name: Name the installers
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          bundle=src-tauri/target/${{ matrix.target }}/release/bundle
+          out=dist-rs
+          mkdir -p $out
+          prefix="DungeonBlitzR-Launcher-$version"
+          case "${{ matrix.name }}" in
+            win*) cp "$(ls $bundle/nsis/*-setup.exe | head -1)" "$out/$prefix-${{ matrix.name }}-setup.exe" ;;
+            mac-x64)
+              cp "$(ls $bundle/dmg/*.dmg | head -1)" "$out/$prefix-mac-x64.dmg" ;;
+            linux)
+              cp "$(ls $bundle/appimage/*.AppImage | head -1)" "$out/$prefix-linux-x86_64.AppImage"
+              cp "$(ls $bundle/deb/*.deb | head -1)" "$out/$prefix-linux-amd64.deb" ;;
+          esac
+          ls -la $out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-launcher-${{ matrix.name }}
+          path: dist-rs/*
+          if-no-files-found: error
