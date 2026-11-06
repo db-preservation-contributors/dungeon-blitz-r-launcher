@@ -39,8 +39,8 @@ jobs:
         include:
           - { os: windows-latest, label: Windows x64, platform: win32, target: x86_64-pc-windows-msvc, toolchain: stable, air: true, name: win-x64 }
           - { os: windows-latest, label: Windows ia32, platform: win32, target: i686-pc-windows-msvc, toolchain: stable, name: win-ia32 }
-          - { os: windows-2022, label: Windows 7 x64, platform: win32, target: x86_64-win7-windows-msvc, toolchain: nightly, win7: true, name: win7-x64 }
-          - { os: windows-2022, label: Windows 7 ia32, platform: win32, target: i686-win7-windows-msvc, toolchain: nightly, win7: true, name: win7-ia32 }
+          - { os: windows-2022, label: Windows 7 x64, platform: win32, target: x86_64-win7-windows-msvc, bundle_target: x86_64-pc-windows-msvc, toolchain: nightly, win7: true, name: win7-x64 }
+          - { os: windows-2022, label: Windows 7 ia32, platform: win32, target: i686-win7-windows-msvc, bundle_target: i686-pc-windows-msvc, toolchain: nightly, win7: true, name: win7-ia32 }
           - { os: macos-15-intel, label: macOS, platform: darwin, target: x86_64-apple-darwin, toolchain: stable, air: true, name: mac-x64 }
           - { os: ubuntu-22.04, label: Linux, platform: linux, target: x86_64-unknown-linux-gnu, toolchain: stable, name: linux }
     steps:
@@ -67,6 +67,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
+          targets: ${{ matrix.bundle_target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -110,7 +111,12 @@ jobs:
         run: |
           mkdir -p vendor
           if [ "${{ matrix.win7 }}" = "true" ]; then
-            npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --features win7 -- -Zbuild-std=std,panic_abort
+            # Tier-3 targets are not in `rustup target list`, which the Tauri CLI checks, so the
+            # binary is built with cargo and bundled as the matching regular Windows target.
+            (cd src-tauri && cargo build --release --locked --target ${{ matrix.target }} --features win7,custom-protocol -Zbuild-std=std,panic_abort)
+            mkdir -p src-tauri/target/${{ matrix.bundle_target }}/release
+            cp src-tauri/target/${{ matrix.target }}/release/dungeon-blitz-r-launcher.exe src-tauri/target/${{ matrix.bundle_target }}/release/
+            npx --yes @tauri-apps/cli@2 bundle --target ${{ matrix.bundle_target }} --bundles nsis
           else
             npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }}
           fi
@@ -119,7 +125,7 @@ jobs:
         shell: bash
         run: |
           version=$(node -p "require('./package.json').version")
-          bundle=src-tauri/target/${{ matrix.target }}/release/bundle
+          bundle=src-tauri/target/${{ matrix.bundle_target || matrix.target }}/release/bundle
           out=dist-rs
           mkdir -p $out
           prefix="DungeonBlitzR-Launcher-$version"

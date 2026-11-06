@@ -47,3 +47,4 @@ strip = true
 
 [features]
 win7 = []
+custom-protocol = ["tauri/custom-protocol"]
