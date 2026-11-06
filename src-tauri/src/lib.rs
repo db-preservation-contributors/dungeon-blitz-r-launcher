@@ -1,6 +1,8 @@
 mod auth;
 mod chat_relay;
 mod config;
+mod dev;
+mod dev_join;
 mod discord_ipc;
 mod engine;
 mod game_host;
@@ -60,6 +62,9 @@ struct Live {
     server_reachable: Option<bool>,
     account_poll: Option<tauri::async_runtime::JoinHandle<()>>,
     recovery_last: u64,
+    dev_bridge: Option<dev_join::Bridge>,
+    dev_join_state: String,
+    dev_join_error: String,
 }
 
 pub struct Launcher {
@@ -77,6 +82,7 @@ pub struct Launcher {
     chat: chat_relay::ChatRelay,
     updates: update::Updates,
     install: install::InstallLocation,
+    dev: dev::DevServer,
     live: Mutex<Live>,
     push_scheduled: AtomicBool,
     last_pushed: Mutex<String>,
@@ -118,6 +124,7 @@ impl Launcher {
                 chat: chat_relay::ChatRelay::new(social.clone(), bus.clone()),
                 updates: update::Updates::new(version.clone(), bus.clone()),
                 install: install::inspect(&exe),
+                dev: dev::DevServer::new(&paths.data_dir, bus.clone()),
                 presence,
                 social,
                 app,
@@ -267,7 +274,14 @@ impl Launcher {
                 "resolvedRenderer": resolved.renderer, "resolvedQuality": resolved.quality,
                 "detected": live.graphics.is_some(), "launcherOnGpu": self.launcher_on_gpu
             },
-            "dev": { "enabled": false, "serverRoot": "", "server": { "state": "idle" }, "join": { "state": "idle", "error": "" }, "playing": false },
+            "dev": {
+                "enabled": saved.dev_mode, "serverRoot": saved.dev_server_root, "server": self.dev.summary(),
+                "join": {
+                    "state": if live.dev_join_state.is_empty() { "idle" } else { live.dev_join_state.as_str() },
+                    "error": live.dev_join_error
+                },
+                "playing": live.dev_bridge.is_some()
+            },
             "install": self.install,
             "update": self.updates.summary(),
             "discord": {
@@ -452,6 +466,15 @@ impl Launcher {
     }
 
     async fn end_game_session(self: &L) {
+        {
+            let mut live = self.live.lock().unwrap();
+            if let Some(mut bridge) = live.dev_bridge.take() {
+                bridge.close();
+            }
+            if live.dev_join_state == "playing" {
+                live.dev_join_state.clear();
+            }
+        }
         self.end_session_services().await;
         self.social.stop();
         self.stop_account_polling();
@@ -720,6 +743,78 @@ impl Launcher {
         self.push();
     }
 
+    /// A developer game: the bridge to `target` on this machine's game ports, then the AIR engine
+    /// on the SWF its page names. None of the player's own session (sign-in, presence, lobby
+    /// chat, the widget) starts: a test server is not the server those belong to.
+    async fn play_dev(self: &L, target: dev_join::Target, label: &str) -> Value {
+        if self.live.lock().unwrap().game_kill.is_some() {
+            return problem("The game is already running. Close it first.");
+        }
+        if self.preferred_engine() != "air" {
+            return problem("Developer servers play in the AIR engine, and this build does not carry it.");
+        }
+        let issue = self.engine_problem("air");
+        if !issue.is_empty() {
+            return problem(issue);
+        }
+        let Some(air) = self.live.lock().unwrap().air.clone() else { return problem("The AIR engine is missing.") };
+        if is_packaged() {
+            let check = engine::air::verify(&air.path);
+            if !check.ok {
+                return problem(format!("{}. Reinstall the launcher to play.", check.reason));
+            }
+        }
+        let bridge = match dev_join::open_bridge(&target).await {
+            Ok(bridge) => bridge,
+            Err(message) => return problem(message),
+        };
+        let swf = engine::projector::resolve_swf_url(&bridge.page_url).await;
+        let launch = engine::air::prepare_launch(&air, &swf, graphics::flash_quality(&self.resolved_graphics().quality));
+        println!("[Dev] {label}: starting {} {:?}", launch.command.display(), launch.args);
+        // Kept before the game starts, so a game that closes at once still closes its bridge.
+        self.live.lock().unwrap().dev_bridge = Some(bridge);
+        let result = match self.spawn_game("air", "AIR", launch).await {
+            Ok(_) => json!({ "ok": true }),
+            Err(message) => {
+                self.live.lock().unwrap().dev_bridge = None;
+                problem(format!("The game could not be started: {message}"))
+            }
+        };
+        self.push();
+        result
+    }
+
+    async fn join_dev(self: &L, address: &str) -> Value {
+        {
+            let mut live = self.live.lock().unwrap();
+            live.dev_join_state = "joining".into();
+            live.dev_join_error.clear();
+        }
+        self.push();
+        let result = match dev_join::resolve_tunnel(address).await {
+            Ok(target) => {
+                let label = match &target {
+                    dev_join::Target::Tunnel { web_host, .. } => format!("join {web_host}"),
+                    dev_join::Target::Local => "join".into(),
+                };
+                self.play_dev(target, &label).await
+            }
+            Err(message) => problem(message),
+        };
+        {
+            let mut live = self.live.lock().unwrap();
+            let ok = result.get("ok") == Some(&json!(true));
+            live.dev_join_state = if ok { "playing".into() } else { String::new() };
+            live.dev_join_error = if ok { String::new() } else { result.get("message").and_then(Value::as_str).unwrap_or("").to_string() };
+        }
+        self.push();
+        result
+    }
+
+    fn dev_off(&self) -> Option<Value> {
+        (!self.store.read().dev_mode).then(|| problem("Developer mode is off."))
+    }
+
     fn stop_game(&self) {
         if let Some(kill) = self.live.lock().unwrap().game_kill.take() {
             let _ = kill.send(());
@@ -907,15 +1002,93 @@ fn set_graphics(l: S, settings: Value) -> Value {
 }
 
 #[tauri::command]
-fn set_dev_mode(l: S) -> Value {
-    let mut s = l.state();
-    s["notice"] = json!("Developer mode is not in this launcher build yet.");
-    s
+fn set_dev_mode(l: S, on: Option<bool>) -> Value {
+    let on = on == Some(true);
+    l.store.write(json!({ "devMode": on }));
+    if !on && l.dev.running() {
+        l.dev.stop();
+    }
+    l.state()
 }
 
 #[tauri::command]
-fn dev_unavailable() -> Value {
-    problem("Developer mode is not in this launcher build yet.")
+async fn dev_choose_server(app: AppHandle, l: S<'_>) -> Result<Value, ()> {
+    let l = launcher!(l);
+    if let Some(off) = l.dev_off() {
+        return Ok(off);
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().set_title("Choose the game server checkout").blocking_pick_folder()
+    })
+    .await
+    .ok()
+    .flatten()
+    .and_then(|p| p.into_path().ok());
+    let Some(chosen) = picked else { return Ok(l.state()) };
+    let chosen = chosen.to_string_lossy().into_owned();
+    l.store.write(json!({ "devServerRoot": chosen }));
+    let mut s = l.state();
+    if let Err(problem) = dev::inspect_server_root(&chosen) {
+        s["notice"] = json!(problem);
+    }
+    Ok(s)
+}
+
+#[tauri::command]
+fn dev_create(l: S) -> Value {
+    let l = launcher!(l);
+    if let Some(off) = l.dev_off() {
+        return off;
+    }
+    // Starting takes a while (a download the first time, two tunnels, the server's own start):
+    // the window follows it through the state, so this answers at once.
+    let root = l.store.read().dev_server_root;
+    let server = l.dev.clone();
+    tauri::async_runtime::spawn(async move {
+        server.start(root).await;
+    });
+    json!({ "ok": true })
+}
+
+#[tauri::command]
+fn dev_stop(l: S) -> Value {
+    if let Some(off) = l.dev_off() {
+        return off;
+    }
+    json!({ "ok": true, "server": l.dev.stop() })
+}
+
+#[tauri::command]
+fn dev_copy_share(app: AppHandle, l: S) -> Value {
+    if let Some(off) = l.dev_off() {
+        return off;
+    }
+    let share = l.dev.summary().share_url;
+    if share.is_empty() {
+        return json!({ "ok": false });
+    }
+    json!({ "ok": app.clipboard().write_text(share).is_ok() })
+}
+
+#[tauri::command]
+async fn dev_play_own(l: S<'_>) -> Result<Value, ()> {
+    let l = launcher!(l);
+    if let Some(off) = l.dev_off() {
+        return Ok(off);
+    }
+    if l.dev.summary().state != "running" {
+        return Ok(problem("Create the server first."));
+    }
+    Ok(l.play_dev(dev_join::Target::Local, "own server").await)
+}
+
+#[tauri::command]
+async fn dev_join(l: S<'_>, address: Option<String>) -> Result<Value, ()> {
+    let l = launcher!(l);
+    if let Some(off) = l.dev_off() {
+        return Ok(off);
+    }
+    Ok(l.join_dev(address.as_deref().unwrap_or("")).await)
 }
 
 #[tauri::command]
@@ -1030,7 +1203,12 @@ pub fn run() {
             game_stats_sync,
             set_graphics,
             set_dev_mode,
-            dev_unavailable,
+            dev_choose_server,
+            dev_create,
+            dev_stop,
+            dev_copy_share,
+            dev_play_own,
+            dev_join,
             damage_meter_open
         ])
         .setup(|app| {
@@ -1090,6 +1268,7 @@ pub fn run() {
             if let Some(l) = handle.try_state::<L>() {
                 l.stop_game();
                 l.social.stop();
+                l.dev.stop();
             }
         }
     });

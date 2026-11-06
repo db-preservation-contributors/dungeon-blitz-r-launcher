@@ -4,7 +4,6 @@
     }
     const core = () => window.__TAURI__.core;
     const call = (command, args) => core().invoke(command, args || {});
-    const devOff = () => call('dev_unavailable');
     window.launcher = Object.freeze({
         getState: () => call('get_state'),
         discordLogin: () => call('discord_login'),
@@ -21,13 +20,13 @@
         gameStatsSync: () => call('game_stats_sync'),
         damageMeterOpen: () => call('damage_meter_open'),
         setGraphics: (settings) => call('set_graphics', { settings: settings || {} }),
-        setDevMode: () => call('set_dev_mode'),
-        devChooseServer: devOff,
-        devCreate: devOff,
-        devStop: devOff,
-        devCopyShare: devOff,
-        devPlayOwn: devOff,
-        devJoin: devOff,
+        setDevMode: (on) => call('set_dev_mode', { on: on === true }),
+        devChooseServer: () => call('dev_choose_server'),
+        devCreate: () => call('dev_create'),
+        devStop: () => call('dev_stop'),
+        devCopyShare: () => call('dev_copy_share'),
+        devPlayOwn: () => call('dev_play_own'),
+        devJoin: (address) => call('dev_join', { address: String(address || '') }),
         onState: (handler) => {
             let unlisten = null;
             let stopped = false;

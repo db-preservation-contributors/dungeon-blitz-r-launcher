@@ -34,6 +34,8 @@ log = "0.4"
 regex = "1"
 tiny_http = "0.12"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
