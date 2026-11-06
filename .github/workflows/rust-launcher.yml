@@ -74,7 +74,6 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Fetch Flash Player
-        if: ${{ !matrix.air }}
         shell: bash
         run: node tools/fetch-projector.js --platform ${{ matrix.platform }}
 
