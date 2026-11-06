@@ -7,12 +7,6 @@
       "note": "Resmi sunucu - launcher acilista buraya baglanir"
     },
     {
-      "id": "live-eu",
-      "name": "Live (Hetzner DE)",
-      "url": "http://2.31.166.155/",
-      "note": "Almanya (Falkenstein) sunucusu - dogrudan IP ile baglanir"
-    },
-    {
       "id": "local",
       "name": "Local (127.0.0.1)",
       "url": "http://127.0.0.1/",
