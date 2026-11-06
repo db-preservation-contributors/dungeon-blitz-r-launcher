@@ -138,7 +138,7 @@ jobs:
           case "${{ matrix.name }}" in
             win*) cp "$(ls $bundle/nsis/*-setup.exe | head -1)" "$out/$prefix-${{ matrix.name }}-setup.exe" ;;
             mac-x64)
-              cp "$(ls $bundle/dmg/*.dmg | head -1)" "$out/$prefix-mac-x64.dmg" ;;
+              tools/mac-vendor.sh "$(ls -d $bundle/macos/*.app | head -1)" "$PWD/$out/$prefix-mac-x64.dmg" ;;
             linux)
               cp "$(ls $bundle/appimage/*.AppImage | head -1)" "$out/$prefix-linux-x86_64.AppImage"
               cp "$(ls $bundle/deb/*.deb | head -1)" "$out/$prefix-linux-amd64.deb" ;;
