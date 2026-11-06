@@ -64,7 +64,7 @@ pub struct Social {
     bus: Bus,
     state: Arc<StdMutex<SocialState>>,
     session: Arc<Mutex<Session>>,
-    task: Arc<StdMutex<Option<tokio::task::JoinHandle<()>>>>,
+    task: Arc<StdMutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
     sink: Arc<StdMutex<Option<ChatSink>>>,
 }
 
@@ -145,7 +145,7 @@ impl Social {
 
     pub fn start(&self, server_url: String, token_fn: TokenFn) {
         let mut task = self.task.lock().unwrap();
-        if task.as_ref().map(|t| !t.is_finished()).unwrap_or(false) {
+        if task.as_ref().map(|t| !t.inner().is_finished()).unwrap_or(false) {
             return;
         }
         let me = self.clone();
@@ -153,7 +153,7 @@ impl Social {
             s.running = true;
             s.last_status = "JavaScript social bridge starting...".into();
         });
-        *task = Some(tokio::spawn(async move {
+        *task = Some(tauri::async_runtime::spawn(async move {
             me.run(server_url, token_fn).await;
         }));
     }

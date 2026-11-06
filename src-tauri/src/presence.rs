@@ -100,7 +100,7 @@ struct Session {
     client: Option<Arc<DiscordIpc>>,
     last_hash: String,
     http: Option<Arc<tiny_http::Server>>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 #[derive(Clone)]
@@ -182,7 +182,7 @@ impl Presence {
             }
         };
         let me = self.clone();
-        let task = tokio::spawn(async move { me.connect_loop().await });
+        let task = tauri::async_runtime::spawn(async move { me.connect_loop().await });
         *guard = Some(Session {
             config,
             server_url: base_url(server_url),

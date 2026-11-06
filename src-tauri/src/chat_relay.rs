@@ -29,7 +29,7 @@ struct Inner {
     cursor: Option<f64>,
     last_seq: f64,
     pending: BTreeMap<u64, (String, String)>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
     state: RelayState,
 }
 
@@ -46,7 +46,7 @@ impl ChatRelay {
         let me = relay.clone();
         social.set_chat_sink(Arc::new(move |name, message| {
             let me = me.clone();
-            tokio::spawn(async move { me.deliver_inbound(name, message).await });
+            tauri::async_runtime::spawn(async move { me.deliver_inbound(name, message).await });
         }));
         relay
     }
@@ -84,7 +84,7 @@ impl ChatRelay {
             inner.cursor = None;
             inner.last_seq = 0.0;
             inner.pending.clear();
-            inner.task = Some(tokio::spawn(async move {
+            inner.task = Some(tauri::async_runtime::spawn(async move {
                 loop {
                     let delay = me.poll().await;
                     tokio::time::sleep(delay).await;

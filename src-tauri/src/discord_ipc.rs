@@ -22,7 +22,7 @@ type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>
 pub struct DiscordIpc {
     writer: Arc<Mutex<Writer>>,
     pending: Pending,
-    reader: tokio::task::JoinHandle<()>,
+    reader: tauri::async_runtime::JoinHandle<()>,
 }
 
 pub fn socket_paths() -> Vec<String> {
@@ -91,7 +91,7 @@ impl DiscordIpc {
         let writer: Arc<Mutex<Writer>> = Arc::new(Mutex::new(writer));
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (ready_tx, ready_rx) = oneshot::channel();
-        let reader = tokio::spawn(read_loop(reader, writer.clone(), pending.clone(), events, ready_tx));
+        let reader = tauri::async_runtime::spawn(read_loop(reader, writer.clone(), pending.clone(), events, ready_tx));
         let client = Self { writer, pending, reader };
         client.send(OP_HANDSHAKE, &json!({ "v": 1, "client_id": client_id })).await;
         match tokio::time::timeout(READY_TIMEOUT, ready_rx).await {

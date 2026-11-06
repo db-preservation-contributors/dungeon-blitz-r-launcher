@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
+use tauri::async_runtime::JoinHandle;
 
 use crate::net::request_json;
 use crate::presence::Presence;
@@ -39,7 +39,7 @@ impl GameHost {
         if with_presence {
             let me = self.clone();
             let url = base.clone();
-            state.tasks.push(tokio::spawn(async move {
+            state.tasks.push(tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(2500)).await;
                 loop {
                     me.sync_presence(&url).await;
@@ -48,7 +48,7 @@ impl GameHost {
             }));
         }
         let url = base.clone();
-        state.tasks.push(tokio::spawn(async move {
+        state.tasks.push(tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(10)).await;
             loop {
                 measure_regions(&url).await;

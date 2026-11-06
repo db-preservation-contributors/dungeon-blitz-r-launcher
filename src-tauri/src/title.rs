@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub const GAME_TITLE: &str = "Dungeon Blitz: R";
 
 #[cfg(windows)]

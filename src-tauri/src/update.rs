@@ -133,7 +133,7 @@ impl Updates {
             return;
         }
         let me = self.clone();
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             tokio::time::sleep(START_DELAY).await;
             loop {
                 me.check().await;
