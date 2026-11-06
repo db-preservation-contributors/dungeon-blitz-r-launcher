@@ -8,9 +8,9 @@
     },
     {
       "id": "live-eu",
-      "name": "Live (europe-west1)",
-      "url": "http://35.241.250.170/",
-      "note": "Avrupa VM'i - Turkiye'den us-east1'e gore belirgin dusuk gecikme"
+      "name": "Live (Hetzner DE)",
+      "url": "http://2.31.166.155/",
+      "note": "Almanya (Falkenstein) sunucusu - dogrudan IP ile baglanir"
     },
     {
       "id": "local",
