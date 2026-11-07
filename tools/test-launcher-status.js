@@ -91,10 +91,6 @@ function loadRenderer() {
             moveToApplications: async () => ({ ok: true }),
             relaunch: () => {},
             gameStatsSync: async () => null,
-            damageMeterOpen: async () => {
-                plays.push('damage-meter');
-                return true;
-            },
             quit: () => {}
         }
     };
@@ -160,17 +156,7 @@ function baseState(flash, social, extra = {}) {
             requirements: ''
         },
         install: extra.install || { relocate: false, reason: '', message: '', sourcePath: '', targetPath: '', canMove: false },
-        discord: extra.discord || { linked: false, email: '', name: '', remembered: false, loginPending: false },
-        damageMeter: extra.damageMeter || {
-            enabled: true,
-            open: false,
-            session: false,
-            running: false,
-            supported: null,
-            live: false,
-            character: '',
-            lastError: ''
-        }
+        discord: extra.discord || { linked: false, email: '', name: '', remembered: false, loginPending: false }
     };
 }
 
@@ -202,32 +188,6 @@ const IDLE_SOCIAL = {
     lobbyId: '',
     lastStatus: ''
 };
-
-/** The damage meter's button: offered once there is an account, and it opens the meter's window. */
-async function checkDamageMeterButton(render, registry, plays) {
-    const button = () => registry.get('damage-meter-open');
-    const signedIn = { linked: true, email: '', name: 'Kuri', remembered: true, loginPending: false };
-
-    // A fresh install's sign-in screen: there is nothing for the meter to read yet.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL));
-    assert.strictEqual(button().hidden, true, 'no damage meter before there is an account');
-    assert.strictEqual(registry.get('tools').hidden, true, 'and no empty row under the status strip');
-
-    // Signed in: offered before the first game, so the window can be placed beside it.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { discord: signedIn }));
-    assert.strictEqual(button().hidden, false, 'the damage meter is offered once signed in');
-    assert.strictEqual(registry.get('tools').hidden, false);
-
-    await button().listeners.click();
-    assert.strictEqual(plays[plays.length - 1], 'damage-meter', 'the button opens the meter window');
-
-    // Turned off with DUNGEON_BLITZ_DAMAGE_METER=0.
-    render(baseState(ARMED_FLASH, IDLE_SOCIAL, { discord: signedIn, damageMeter: { enabled: false } }));
-    assert.strictEqual(button().hidden, true, 'no button when the meter is turned off');
-    assert.strictEqual(registry.get('tools').hidden, true);
-
-    console.log('[test-launcher-status] the damage meter button shows when it should and opens the meter');
-}
 
 const READY_AIR = { found: true, ready: true, tampered: false };
 const NO_AIR = { found: false, ready: false, tampered: false };
@@ -679,7 +639,6 @@ async function main() {
     await checkPlayButtons(render, registry, plays);
     await checkCopySignInLink(render, registry, plays);
     await checkLoginCode(render, registry, plays);
-    await checkDamageMeterButton(render, registry, plays);
     console.log('[test-launcher-status] all assertions passed');
 }
 
