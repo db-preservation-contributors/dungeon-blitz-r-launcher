@@ -493,6 +493,12 @@ impl Launcher {
         if let Some(cwd) = &launch.cwd {
             command.current_dir(cwd);
         }
+        for (k, v) in engine::projector::appimage_env(|k| std::env::var(k).ok()) {
+            match v {
+                Some(v) => command.env(k, v),
+                None => command.env_remove(k),
+            };
+        }
         for (k, v) in &launch.env {
             command.env(k, v);
         }
@@ -1215,14 +1221,20 @@ pub fn run() {
             l.restore_login();
             if !l.playable() {
                 let running_from: PathBuf = std::env::current_exe().unwrap_or_default();
-                error_box(
-                    &handle,
-                    format!(
-                        "This copy of the launcher has no game engine (AIR or Flash Player), so the game could not start even after signing in.\n\nRunning from: {}\nThis is an incomplete or outdated build.\n\nFix: install the current build again from the installer.\n\nTo start anyway, set DUNGEON_BLITZ_ALLOW_NO_FLASH=1.",
-                        running_from.display()
-                    ),
+                let reason = [l.engine_problem("air"), l.engine_problem("projector")].join("\n");
+                let text = format!(
+                    "This copy of the launcher has no game engine it can run (AIR or Flash Player), so the game could not start even after signing in.\n\n{reason}\n\nRunning from: {}\nThis is an incomplete or outdated build.\n\nFix: install the current build again from the installer.\n\nTo start anyway, set DUNGEON_BLITZ_ALLOW_NO_FLASH=1.",
+                    running_from.display()
                 );
-                std::process::exit(1);
+                eprintln!("[Launcher] Cannot start: {reason}");
+                // A blocking dialog on the main thread waits for the event loop it is blocking:
+                // on Linux nothing was ever drawn and the launcher hung without a window. The
+                // event loop runs while this thread waits for the box, then exits.
+                std::thread::spawn(move || {
+                    error_box(&handle, text);
+                    handle.exit(1);
+                });
+                return Ok(());
             }
             create_window(&handle)?;
             l.updates.start();

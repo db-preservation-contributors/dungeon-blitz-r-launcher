@@ -85,6 +85,11 @@ package
       private static const RED:uint = 0xA84B4B;
       private static const DARK:uint = 0x140B08;
 
+      // DungeonBlitz.swf's own background, which Flash Player and the site's page show around the
+      // game. A loaded SWF's background is not the stage's, so the stage takes it when the game runs:
+      // in full screen the game keeps its size and the rest of the screen is this colour.
+      private static const GAME_BACKGROUND:uint = 0x484955;
+
       private static const DISPLAY:String = "Averia Serif Libre";
       private static const UI:String = "Vollkorn SC";
 
@@ -269,6 +274,7 @@ package
          {
             removeChild(screen);
          }
+         stage.color = GAME_BACKGROUND;
          addChild(loader);
          // Above the game, which is a sibling of it and gets no click this button takes.
          addChild(fullScreenButton);
