@@ -172,6 +172,15 @@ function engineRows(state) {
         updateDetail =
             'The launcher checks GitHub for a newer version after start and every six hours. This build cannot install it itself, so a download link appears here.';
     }
+    if (update.mode === 'new-launcher') {
+        // The last Electron launcher: the only "update" is the new launcher, installed by hand.
+        if (update.state === 'available') {
+            updateValue = `${current} - the new launcher ${update.version} is ready`;
+            updateDetail = `This launcher is retired. Download opens ${update.asset || 'the release page'} on GitHub: install it and play from it; your sign-in carries over. This copy can be removed afterwards.`;
+        } else {
+            updateDetail = 'This is the last version of this launcher. A new launcher is on its way; a download link appears here when it is out.';
+        }
+    }
 
     // The Discord widget is filled by the game server, which holds the bot token; the
     // launcher only asks. So this row is where "the widget is empty" stops being a guess:
@@ -515,7 +524,8 @@ function render(state) {
     // Builds that cannot install an update get a download link for it instead.
     elements.updateDownload.hidden = !state.update || state.update.state !== 'available';
     if (!elements.updateDownload.hidden) {
-        elements.updateDownload.textContent = `Download ${state.update.version}`;
+        elements.updateDownload.textContent =
+            state.update.mode === 'new-launcher' ? 'Download the new launcher' : `Download ${state.update.version}`;
     }
     elements.updateActions.hidden = elements.updateInstall.hidden && elements.updateDownload.hidden;
     // Syncing only means something once a session has given the launcher a server to ask, so
