@@ -10,8 +10,7 @@ with Discord — and once that is done it opens the game and connects to the ser
 
 In the background it also connects the player's Discord lobby so lobby chat works,
 publishes Discord rich presence, and mirrors the player's in-game chat into that lobby — in
-both directions — for as long as the game is open. A damage meter, in a window of its own,
-shows the player's DPS, damage per spell and rotation as they play.
+both directions — for as long as the game is open.
 
 ## A free, non-commercial preservation project
 
@@ -633,89 +632,6 @@ The portal half is not code, and it is where an invisible widget usually stops:
 Until the server route exists the row reads `server cannot write it`, so a portal-side
 problem and a data-side problem can be told apart without guessing.
 
-## Damage meter
-
-`Damage meter`, under the status strip once an account is known, opens a window to keep
-beside the game: a timer and DPS, damage per spell (what it scales with, crits, damage over
-time, which crits set off a rune proc), the cast rotation (`MA2 s2 s3 RA1 s4`), Dungeon mode
-(one run per dungeon: it pauses when the player dies or a boss falls, ends at 100% or Level
-Complete, and counts the gold gained), and exports: `dbb-dps` JSON for the DPS Calculator, or
-CSV for a spreadsheet. `F6` starts or stops the timer and `F7` resets it while the window has
-focus; `Keep on top` holds it above the game.
-
-The meter is DB DPS Launcher's ([db-dpsmod](https://github.com/killssingkurisu/db-dpsmod), MIT):
-`lib/damageMeter` carries its packet reading, meter and export files unchanged, so a fix there
-can be copied across whole, and the window's page is its in-game overlay on a page of its own.
-
-The launcher never sees the game's traffic -- AIR and Flash Player talk to the
-server themselves -- so, as with chat, the game server publishes what the meter needs on a
-feed and the launcher reads it: about twice a second, and only while the meter's window is
-open during a game session, so a player who never opens it costs the server nothing. Nothing
-on the player's machine is read, patched or redirected:
-
-```text
-GET /api/combat/outbound[?since=<cursor>]     X-Launcher-Token: <the launcher token>
-  200 { cursor, now, level, backlog, data, packets: [{ seq, at, dir, id, data }] }
-  404 { "reason": "no-game-session" }    the feed is there; no game session for this caller yet
-  404 (anything else)                    no feed on this server, which the meter window says
-```
-
-The token is the launcher token `/api/discord/stats/sync` takes in its body; a GET has no body,
-and a header keeps it out of URLs and logs. The server finds the caller's game session from
-it, and answers a missing or unknown token like a caller with no game session (`401` or `403`
-also work: the meter window then says the server did not accept the sign-in).
-
-- `packets` are the caller's own game session's, across all its connections, oldest first:
-  `dir` is `"up"` for a packet the client sent and `"down"` for one the server sent it, `id`
-  the packet type, `data` the payload in base64 (the bytes after the 4-byte header, exactly as
-  they passed on that connection, entity ids and all), `at` the server's clock when it passed,
-  in Unix epoch milliseconds, and `seq` a number that only goes up for the whole session,
-  across levels.
-- `cursor` is a string of the server's choosing; the next request passes it back as `since`
-  and gets what came after it.
-- `now` is the server's clock as it answers, in Unix epoch milliseconds. The meter plays
-  packets back a second behind it, spaced as they happened, so a batch that arrives at once
-  still times every hit right.
-- An answer without `since` has `backlog: true`, `level` -- the level the player is in, by its
-  LevelTypes name (`GoblinRiverDungeon`) -- and the packets the player's current connection has
-  carried so far, from their arrival in the level. They tell the meter who the player is and
-  what is around them, and none of them are counted, so a backlog can leave out casts, hits and
-  ticks and should: every `0x08` and `0x0F`, and the `0x07` that changed a state (below), is
-  enough. When a `since` is too old to answer, a backlog makes the meter start over the same
-  way. After the backlog, `level` is not read again: enter world (`0x21`) in the stream says
-  when the player moves on.
-- `data`, optional, names the game's data files -- `{ "game": "/p/cbq/Game.swz", "login":
-  "/p/cbp/Login.swz" }` -- for spell names, ranks and scaling, and which monsters are bosses.
-  Only files on the game server itself are fetched; without them the meter uses the snapshot
-  in `lib/damageMeter/data`.
-
-The packets the meter reads; everything else can be left out:
-
-| Packet | Up (client to server) | Down (server to client) |
-| --- | --- | --- |
-| `0x08` entity full update | everything the client runs: the player's character (and its id), its summons, and the monsters it runs, with names and teams | |
-| `0x0F` newly relevant entity | | names and teams of what comes into view |
-| `0x07` incremental update | entity state: a death, a revive, a boss dying | the same |
-| `0x09` power cast | casts | |
-| `0x0A` power hit | hits, crits, rune procs | |
-| `0x79` damage-over-time tick | ticks | ticks on monsters another player's client runs |
-| `0x35` receive gold | | gold gained |
-| `0x21` enter world | | the next level, which comes on a new connection |
-| `0xB7` level completion | how much of the dungeon is cleared | the same |
-| `0x3F` set level complete | Level Complete | |
-| `0x87` receive level complete | | Level Complete |
-
-`0x07` comes many times a second for everything that moves. The meter needs, for each entity,
-only the first one after its `0x08` or `0x0F` and every one whose state (the 2 bits after id,
-dx, dy and dvx) differs from the one before; sending them all works too, at more traffic. An
-answer can be up to 16 MB.
-
-Turn the meter off with `DUNGEON_BLITZ_DAMAGE_METER=0`.
-
-```bash
-node tools/test-damage-meter.js   # the feed against a mock server: backlog, playback, a new level, exports
-```
-
 ## Remembered account
 
 The launcher's own sign-in writes the account to `launcher-state.json`. A player who signed
@@ -1018,7 +934,6 @@ drives the module against a local mock.
 | `tools/test-social-bridge.js` | Discord-client and browser authorization paths, lobby join, two-way chat |
 | `tools/test-discord-ipc.js` | The RPC framing, `AUTHORIZE` payload and PING/PONG |
 | `tools/test-launcher-status.js` | Every state of the status strip, the account row and the play button |
-| `tools/test-damage-meter.js` | The combat feed against a mock server: no feed, no session, the backlog, playback at the pace of play, a new level, game data fetched from the game server only, exports and settings |
 | `tools/test-install-location.js` | Disk-image and Downloads detection, and what is deliberately not flagged |
 | `tools/test-windows-support.js` | Which Windows versions and architectures start, and how the others are refused |
 | `tools/test-projector.js` | Finding Flash Player, the SWF it opens, the pinned downloads, its fingerprint, and the presence and region-latency work done for the game page |
@@ -1087,14 +1002,9 @@ does in Flash Player, rather than being scaled up (`air/src/DungeonBlitzAir.as`)
 - The launcher shell runs sandboxed, with `contextIsolation: true`,
   `nodeIntegration: false` and plugins disabled; its only contact with the main process is the fixed set of IPC calls in
   `preload.js` (state, sign-in, forget, play, choose Flash Player, move to Applications,
-  open the damage meter, restart to update, open the update download, relaunch, quit) and
+  restart to update, open the update download, relaunch, quit) and
   it loads no remote content at all. The update download takes no URL from the window: the
   main process opens only the GitHub link its own release check found.
-- The damage meter's window is locked down the same way, with a preload of its own
-  (`lib/damageMeter/preload.js`) that has two calls: a command to the meter, and the view it
-  sends back. The main process takes commands from that window only. The meter reads the
-  combat feed of the player's own game session and the game's data files from the game
-  server, and nothing else; it does not touch the game, its files or its traffic.
 - No window of the launcher hosts Flash. The game runs in the AIR engine or in Adobe's
   standalone Flash Player, each a separate program started on the selected server only. Flash
   Player is pinned in `projector.lock.json`; the AIR bundle is fingerprinted at build time.

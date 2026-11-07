@@ -20,7 +20,6 @@ contextBridge.exposeInMainWorld('launcher', {
     // Opens the update the main process found; it takes no URL from this side.
     updateDownload: () => ipcRenderer.invoke('launcher:updateDownload'),
     gameStatsSync: () => ipcRenderer.invoke('launcher:gameStatsSync'),
-    damageMeterOpen: () => ipcRenderer.invoke('launcher:damageMeterOpen'),
     setGraphics: (settings) => ipcRenderer.invoke('launcher:setGraphics', settings),
     // Developer mode: test servers (Create) and joining one (Join), in AIR.
     setDevMode: (on) => ipcRenderer.invoke('launcher:setDevMode', on === true),
