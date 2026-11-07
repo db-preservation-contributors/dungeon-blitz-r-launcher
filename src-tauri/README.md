@@ -52,3 +52,18 @@ fingerprints are compiled into the binary by `build.rs`.
 
 The Windows 7 build runs on WebView2 109, the last version for Windows 7; the installer sets it
 up when it is missing. `.github/workflows/rust-launcher.yml` builds all of them.
+
+## Releases
+
+The Rust launcher's version is the `version` in `tauri.conf.json`, not `package.json`:
+`package.json` stays the Electron launcher's, and bumping it on `main` starts the Electron
+Release workflow. Rust versions start at 1.12.0 so their tags never meet an Electron one.
+
+To make a release, raise the version in `tauri.conf.json`, then run the **Rust launcher**
+workflow by hand (Actions, Run workflow, on `main`). It builds every installer and attaches
+them to one **draft** release `v<version>`; it never publishes. Running it again for the same
+version replaces the draft's installers; a published tag is refused.
+
+The installed launcher's update notice (`src/update.rs`) reads GitHub's *latest* release and
+picks the file for its build by name (`-mac-x64.dmg`, `-win-x64-setup.exe`,
+`-win7-x64-setup.exe`, `.AppImage`, `.deb`), so keep the names the workflow gives.

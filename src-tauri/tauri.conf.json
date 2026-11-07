@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Dungeon Blitz R",
-  "version": "../package.json",
+  "version": "1.12.0",
   "identifier": "studio.theminesa.dungeonblitzr.launcher",
   "build": {
     "frontendDist": "../renderer"

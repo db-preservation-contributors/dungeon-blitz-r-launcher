@@ -7,6 +7,11 @@ on:
   pull_request:
     paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', '.github/workflows/rust-launcher.yml']
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Attach the installers to a DRAFT GitHub release (never published here)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -130,7 +135,9 @@ jobs:
       - name: Name the installers
         shell: bash
         run: |
-          version=$(node -p "require('./package.json').version")
+          # The Rust launcher has its own version (src-tauri/tauri.conf.json). package.json stays
+          # the Electron launcher's: bumping it on main starts the Electron Release workflow.
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
           bundle=src-tauri/target/${{ matrix.bundle_target || matrix.target }}/release/bundle
           out=dist-rs
           mkdir -p $out
@@ -150,3 +157,56 @@ jobs:
           name: rust-launcher-${{ matrix.name }}
           path: dist-rs/*
           if-no-files-found: error
+
+  release:
+    # One draft release with every build's installers. Nothing here publishes it: a person
+    # reads it and presses Publish. The tag is v<tauri.conf.json version>, which starts at
+    # 1.12.0 so it never meets an Electron tag (1.11.x). update.rs finds a new version through
+    # GitHub's latest release and picks the installer by the names "Name the installers" gives.
+    name: Draft release
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rust-launcher-*
+          path: dist-rs
+          merge-multiple: true
+
+      - name: Create or update the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          tag="v$version"
+          ls -la dist-rs
+          for name in mac-x64.dmg win-x64-setup.exe win-ia32-setup.exe win7-x64-setup.exe win7-ia32-setup.exe linux-x86_64.AppImage linux-amd64.deb; do
+            test -f "dist-rs/DungeonBlitzR-Launcher-$version-$name" || { echo "::error::missing DungeonBlitzR-Launcher-$version-$name"; exit 1; }
+          done
+          state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          if [ "$state" = "false" ]; then
+            echo "::error::$tag is already published. Raise the version in src-tauri/tauri.conf.json."
+            exit 1
+          fi
+          notes="Dungeon Blitz: R launcher $version, the Rust launcher. Built from $GITHUB_SHA by run $GITHUB_RUN_ID.
+
+          - macOS: DungeonBlitzR-Launcher-$version-mac-x64.dmg
+          - Windows 10/11: win-x64-setup.exe (64-bit) or win-ia32-setup.exe (32-bit)
+          - Windows 7/8/8.1: win7-x64-setup.exe or win7-ia32-setup.exe
+          - Linux: linux-x86_64.AppImage or linux-amd64.deb"
+          if [ "$state" = "true" ]; then
+            echo "Draft $tag exists; replacing its installers."
+            gh release upload "$tag" dist-rs/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$tag" --draft --target "$GITHUB_SHA" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist-rs/* --draft --target "$GITHUB_SHA" \
+              --title "$version (Rust launcher)" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+          fi
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'
