@@ -3,9 +3,9 @@ name: Rust launcher
 on:
   push:
     branches: [main]
-    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', '.github/workflows/rust-launcher.yml']
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', '.github/workflows/rust-launcher.yml']
   pull_request:
-    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', '.github/workflows/rust-launcher.yml']
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', '.github/workflows/rust-launcher.yml']
   workflow_dispatch:
     inputs:
       release:
@@ -123,10 +123,15 @@ jobs:
             (cd src-tauri && cargo fetch --locked)
             arch=x86_64; case "${{ matrix.target }}" in i686-*) arch=i686 ;; esac
             for d in "$CARGO_HOME"/registry/src/*/windows_${arch}_msvc-*/lib; do RUSTFLAGS="$RUSTFLAGS -L native=$(cygpath -m "$d")"; done
+            # windows_slim_errors: no RoOriginateErrorW (api-ms-win-core-winrt-error, Windows 8+).
+            # crt-static: no api-ms-win-crt-*.dll, which Windows 7 has only with the UCRT update.
+            RUSTFLAGS="$RUSTFLAGS --cfg windows_slim_errors -C target-feature=+crt-static"
             export RUSTFLAGS
             (cd src-tauri && cargo build --release --locked --target ${{ matrix.target }} --features win7,custom-protocol -Zbuild-std=std,panic_abort)
             mkdir -p src-tauri/target/${{ matrix.bundle_target }}/release
             cp src-tauri/target/${{ matrix.target }}/release/dungeon-blitz-r-launcher.exe src-tauri/target/${{ matrix.bundle_target }}/release/
+            # combase.dll (Windows 8+) -> ole32.dll, then refuse any import Windows 7 lacks.
+            node tools/win7-imports.js src-tauri/target/${{ matrix.bundle_target }}/release/dungeon-blitz-r-launcher.exe
             npx --yes @tauri-apps/cli@2 bundle --target ${{ matrix.bundle_target }} --bundles nsis
           else
             npx --yes @tauri-apps/cli@2 build --verbose --target ${{ matrix.target }}
