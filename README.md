@@ -334,7 +334,10 @@ a supported runtime. A build plays in it whenever `vendor/air/<platform>/` has a
   old one. A URL without a `clientrev` is never kept.
 - While the SWF downloads, the window shows a progress bar. When it cannot be had, it says why
   in a player's words (server busy, version missing, no connection, a broken download), with
-  **Try again**, an automatic retry after 20 s, and the technical detail underneath.
+  **Try again**, an automatic retry after 20 s, and the technical detail underneath. Both
+  screens wear the site's look, as the launcher window does: the hero art, the ornament and
+  title, and Averia Serif Libre and Vollkorn SC, embedded from `air/assets/` (TrueType copies of
+  `renderer/assets/fonts/`, under the OFL in `air/assets/OFL.txt`).
 
 Building it needs the AIR SDK (free for personal use; download it from
 https://airsdk.harman.com/download after accepting its license). ADT builds only for the system it

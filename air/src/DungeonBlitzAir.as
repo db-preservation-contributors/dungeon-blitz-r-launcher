@@ -1,6 +1,9 @@
 package
 {
    import flash.desktop.NativeApplication;
+   import flash.display.Bitmap;
+   import flash.display.DisplayObject;
+   import flash.display.GradientType;
    import flash.display.Graphics;
    import flash.display.Loader;
    import flash.display.Sprite;
@@ -26,7 +29,10 @@ package
    import flash.net.URLLoaderDataFormat;
    import flash.net.URLRequest;
    import flash.system.ApplicationDomain;
+   import flash.geom.Matrix;
    import flash.system.LoaderContext;
+   import flash.text.AntiAliasType;
+   import flash.text.Font;
    import flash.text.TextField;
    import flash.text.TextFieldAutoSize;
    import flash.text.TextFormat;
@@ -52,29 +58,46 @@ package
     *
     * While the SWF downloads, a loading screen shows its progress. When it cannot be had, an error
     * screen says what happened in a player's words, with Try again (and an automatic retry) and
-    * the technical detail underneath.
+    * the technical detail underneath. Both wear theminesa.studio/dungeon-blitz-r.html's look, as
+    * the launcher window does: its hero art, its ornament and title, Averia Serif Libre and
+    * Vollkorn SC (embedded from assets/, converted from renderer/assets/fonts/), and its colours.
     *
     * The standard window chrome has no full-screen button on Windows (macOS has its green one), so
     * F11, Alt+Enter, Ctrl+F (Cmd+F) and a small button in the top-right corner toggle full screen, and the game
     * lays itself out to fill it, as in Flash Player's full screen.
     */
-   [SWF(width="1152", height="768", backgroundColor="#2B2C36", frameRate="60")]
+   [SWF(width="1152", height="768", backgroundColor="#070707", frameRate="60")]
    public class DungeonBlitzAir extends Sprite
    {
       private static const QUALITIES:Array = ["LOW", "MEDIUM", "HIGH", "BEST"];
       private static const CACHE_FOLDER:String = "client-cache";
       /** Seconds before an error screen tries again by itself. */
       private static const RETRY_SECONDS:int = 20;
-      private static const BAR_WIDTH:int = 360;
+      private static const BAR_WIDTH:int = 420;
+      private static const COLUMN:int = 640;
 
-      private static const BACKGROUND:uint = 0x2B2C36;
-      private static const CARD:uint = 0x1D1E26;
-      private static const CARD_EDGE:uint = 0x4A4B5C;
-      private static const TRACK:uint = 0x3A3B4A;
-      private static const ACCENT:uint = 0xE8A33D;
-      private static const TEXT:uint = 0xFFFFFF;
-      private static const MUTED:uint = 0xB9BACB;
-      private static const FAINT:uint = 0x84859A;
+      // theminesa.studio/dungeon-blitz-r.html
+      private static const INK:uint = 0x070707;
+      private static const WHITE:uint = 0xFFFFFF;
+      private static const GOLD:uint = 0xEAC06B;
+      private static const CREAM:uint = 0xE0CDA7;
+      private static const MUTED:uint = 0xA8978A;
+      private static const RED:uint = 0xA84B4B;
+      private static const DARK:uint = 0x140B08;
+
+      private static const DISPLAY:String = "Averia Serif Libre";
+      private static const UI:String = "Vollkorn SC";
+
+      [Embed(source="../assets/averia-serif-libre-400.ttf", fontName="Averia Serif Libre", fontWeight="normal", embedAsCFF="false", mimeType="application/x-font")]
+      private static const AveriaRegular:Class;
+      [Embed(source="../assets/averia-serif-libre-700.ttf", fontName="Averia Serif Libre", fontWeight="bold", embedAsCFF="false", mimeType="application/x-font")]
+      private static const AveriaBold:Class;
+      [Embed(source="../assets/vollkorn-sc-600.ttf", fontName="Vollkorn SC", fontWeight="normal", embedAsCFF="false", mimeType="application/x-font")]
+      private static const VollkornSemibold:Class;
+      [Embed(source="../assets/vollkorn-sc-700.ttf", fontName="Vollkorn SC", fontWeight="bold", embedAsCFF="false", mimeType="application/x-font")]
+      private static const VollkornBold:Class;
+      [Embed(source="../assets/background.jpg")]
+      private static const Backdrop:Class;
 
       private var started:Boolean = false;
       private var gameUrl:String = "";
@@ -84,12 +107,18 @@ package
       private var httpStatus:int = 0;
 
       private var screen:Sprite;
+      private var backdrop:Bitmap;
+      private var shade:Sprite;
+      private var ornamentTop:Sprite;
+      private var ornamentBottom:Sprite;
+      private var gameTitle:TextField;
       private var screenTitle:TextField;
       private var screenBody:TextField;
       private var screenDetail:TextField;
+      private var credit:TextField;
       private var progressTrack:Sprite;
       private var progressFill:Sprite;
-      /** 0..1, or below 0 for a bar with no amount (the cached game is starting). */
+      /** 0..1, or below 0 for a bar with no amount (the kept game is starting). */
       private var progress:Number = -1;
       private var buttons:Sprite;
       private var retryTimer:Timer;
@@ -340,30 +369,46 @@ package
 
       private function buildScreen() : void
       {
+         Font.registerFont(AveriaRegular);
+         Font.registerFont(AveriaBold);
+         Font.registerFont(VollkornSemibold);
+         Font.registerFont(VollkornBold);
          screen = new Sprite();
-         screenTitle = label(24, TEXT, true);
-         screenBody = label(15, MUTED, false);
-         screenDetail = label(11, FAINT, false);
+         backdrop = new Backdrop() as Bitmap;
+         backdrop.smoothing = true;
+         shade = new Sprite();
+         ornamentTop = ornament();
+         ornamentBottom = ornament();
+         gameTitle = label(DISPLAY, 60, WHITE, true, -0.6);
+         gameTitle.text = "Dungeon Blitz: R";
+         screenTitle = label(DISPLAY, 26, GOLD, true, 0.5);
+         screenBody = label(DISPLAY, 17, CREAM, false, 0);
+         screenDetail = label(DISPLAY, 12, MUTED, false, 0.2);
          screenDetail.selectable = true;
+         credit = label(UI, 12, WHITE, false, 1);
+         credit.alpha = 0.7;
+         credit.text = "REMAKE BY THE MINESA STUDIOS";
          progressTrack = new Sprite();
          progressFill = new Sprite();
          progressTrack.addChild(progressFill);
          buttons = new Sprite();
-         screen.addChild(screenTitle);
-         screen.addChild(screenBody);
-         screen.addChild(progressTrack);
-         screen.addChild(buttons);
-         screen.addChild(screenDetail);
+         for each (var part:Object in [backdrop, shade, ornamentTop, gameTitle, ornamentBottom, screenTitle, screenBody, progressTrack, buttons, screenDetail, credit])
+         {
+            screen.addChild(part as DisplayObject);
+         }
          addChild(screen);
       }
 
-      private static function label(size:int, color:uint, bold:Boolean) : TextField
+      private static function label(font:String, size:int, color:uint, bold:Boolean, spacing:Number) : TextField
       {
          var field:TextField = new TextField();
-         var format:TextFormat = new TextFormat("_sans", size, color, bold);
+         var format:TextFormat = new TextFormat(font, size, color, bold);
          format.align = TextFormatAlign.CENTER;
-         format.leading = 4;
+         format.leading = Math.round(size * 0.25);
+         format.letterSpacing = spacing;
          field.defaultTextFormat = format;
+         field.embedFonts = true;
+         field.antiAliasType = AntiAliasType.ADVANCED;
          field.multiline = true;
          field.wordWrap = true;
          field.selectable = false;
@@ -371,10 +416,55 @@ package
          return field;
       }
 
+      /**
+       * The site's divider: a thin line from a small diamond on each side, and three four-point
+       * stars in the middle (large, small, large). Drawn at COLUMN wide, centred on x = 0.
+       */
+      private static function ornament() : Sprite
+      {
+         var art:Sprite = new Sprite();
+         var g:Graphics = art.graphics;
+         var half:Number = COLUMN / 2;
+         var gap:Number = 66;
+         g.lineStyle(1, WHITE, 0.85);
+         g.moveTo(-half + 4, 0);
+         g.lineTo(-gap, 0);
+         g.moveTo(gap, 0);
+         g.lineTo(half - 4, 0);
+         g.lineStyle();
+         g.beginFill(WHITE, 0.85);
+         for each (var end:Number in [-half + 3, half - 3])
+         {
+            g.moveTo(end - 3, 0);
+            g.lineTo(end, -3);
+            g.lineTo(end + 3, 0);
+            g.lineTo(end, 3);
+            g.lineTo(end - 3, 0);
+         }
+         g.endFill();
+         star(g, -36, 13);
+         star(g, 0, 8);
+         star(g, 36, 13);
+         return art;
+      }
+
+      /** A four-point star with curved-in sides, `r` from its centre to each point. */
+      private static function star(g:Graphics, cx:Number, r:Number) : void
+      {
+         var waist:Number = r * 0.18;
+         g.beginFill(WHITE);
+         g.moveTo(cx, -r);
+         g.curveTo(cx + waist, -waist, cx + r, 0);
+         g.curveTo(cx + waist, waist, cx, r);
+         g.curveTo(cx - waist, waist, cx - r, 0);
+         g.curveTo(cx - waist, -waist, cx, -r);
+         g.endFill();
+      }
+
       private function showLoading(title:String, fraction:Number) : void
       {
          errorBody = "";
-         screenTitle.text = title;
+         screenTitle.text = title.toUpperCase();
          screenBody.text = "";
          screenDetail.text = "";
          clearButtons();
@@ -386,7 +476,7 @@ package
       private function showError(title:String, body:String, detail:String) : void
       {
          errorBody = body;
-         screenTitle.text = title;
+         screenTitle.text = title.toUpperCase();
          screenDetail.text = detail;
          progressTrack.visible = false;
          clearButtons();
@@ -405,7 +495,7 @@ package
       private function showMessage(title:String, body:String) : void
       {
          errorBody = "";
-         screenTitle.text = title;
+         screenTitle.text = title.toUpperCase();
          screenBody.text = body;
          screenDetail.text = "";
          progressTrack.visible = false;
@@ -415,7 +505,7 @@ package
 
       private function updateRetryText() : void
       {
-         screenBody.text = errorBody + "\n\nTrying again in " + retryLeft + " s.";
+         screenBody.text = errorBody + "\nTrying again in " + retryLeft + " s.";
       }
 
       private function onRetryTick(event:TimerEvent) : void
@@ -458,33 +548,27 @@ package
          }
       }
 
+      /** The site's buttons: red with a gold edge for the main action, dark with a gold edge beside it. */
       private function addButton(text:String, primary:Boolean, onClick:Function) : void
       {
          var button:Sprite = new Sprite();
          button.buttonMode = true;
          button.mouseChildren = false;
-         var caption:TextField = new TextField();
-         caption.defaultTextFormat = new TextFormat("_sans", 15, primary ? CARD : TEXT, true);
+         var caption:TextField = label(UI, 20, WHITE, true, -0.4);
+         caption.wordWrap = false;
          caption.autoSize = TextFieldAutoSize.LEFT;
-         caption.selectable = false;
-         caption.text = text;
-         var buttonWidth:Number = Math.max(132, caption.width + 40);
+         caption.text = text.toUpperCase();
+         var buttonWidth:Number = Math.max(196, caption.width + 56);
+         var buttonHeight:Number = 52;
          var g:Graphics = button.graphics;
-         if (primary)
-         {
-            g.beginFill(ACCENT);
-         }
-         else
-         {
-            g.lineStyle(1, CARD_EDGE);
-            g.beginFill(CARD);
-         }
-         g.drawRoundRect(0, 0, buttonWidth, 40, 10, 10);
+         g.lineStyle(1, GOLD);
+         g.beginFill(primary ? RED : DARK, primary ? 1 : 0.72);
+         g.drawRoundRect(0, 0, buttonWidth, buttonHeight, 8, 8);
          g.endFill();
          caption.x = (buttonWidth - caption.width) / 2;
-         caption.y = (40 - caption.height) / 2;
+         caption.y = (buttonHeight - caption.height) / 2;
          button.addChild(caption);
-         button.x = buttons.numChildren == 0 ? 0 : buttons.width + 12;
+         button.x = buttons.numChildren == 0 ? 0 : buttons.width + 16;
          button.addEventListener(MouseEvent.CLICK, onClick);
          button.addEventListener(MouseEvent.ROLL_OVER, onScreenButtonHover);
          button.addEventListener(MouseEvent.ROLL_OUT, onScreenButtonHover);
@@ -504,12 +588,12 @@ package
          {
             return;
          }
-         g.beginFill(ACCENT);
-         g.drawRoundRect(0, 0, Math.max(8, BAR_WIDTH * progress), 8, 8, 8);
+         g.beginFill(GOLD);
+         g.drawRoundRect(0, 0, Math.max(6, BAR_WIDTH * progress), 6, 6, 6);
          g.endFill();
       }
 
-      /** One card in the middle of the window, laid out again on every change and resize. */
+      /** The hero art covering the window, darkened, and one centred column; again on every change and resize. */
       private function layoutScreen() : void
       {
          if (!screen.parent)
@@ -518,68 +602,84 @@ package
          }
          var w:Number = stage.stageWidth;
          var h:Number = stage.stageHeight;
-         var cardWidth:Number = Math.min(560, w - 48);
-         var inner:Number = cardWidth - 64;
-         screenTitle.width = inner;
-         screenBody.width = inner;
-         screenDetail.width = inner;
+
+         // Cover the window with the art, as the site's hero does, and darken it toward the right.
+         var cover:Number = Math.max(w / backdrop.bitmapData.width, h / backdrop.bitmapData.height);
+         backdrop.scaleX = backdrop.scaleY = cover;
+         backdrop.x = Math.round((w - backdrop.width) / 2);
+         backdrop.y = Math.round((h - backdrop.height) / 2);
+         var sg:Graphics = shade.graphics;
+         sg.clear();
+         var m:Matrix = new Matrix();
+         m.createGradientBox(w, h, 0);
+         sg.beginGradientFill(GradientType.LINEAR, [INK, INK, INK], [0.55, 0.78, 0.9], [0, 140, 255], m);
+         sg.drawRect(0, 0, w, h);
+         sg.endFill();
+
+         var column:Number = Math.min(COLUMN, w - 48);
+         var text:Number = Math.min(560, column);
+         gameTitle.width = column;
+         screenTitle.width = text;
+         screenBody.width = text;
+         screenDetail.width = text;
+         ornamentTop.scaleX = ornamentBottom.scaleX = column / COLUMN;
          screenBody.visible = screenBody.text.length > 0;
          screenDetail.visible = screenDetail.text.length > 0;
          buttons.visible = buttons.numChildren > 0;
 
-         // Positions inside the card first; the card's own place is added at the end.
-         var y:Number = 36;
+         // Heights first, from y = 0; the whole column is then centred.
+         var y:Number = 0;
+         ornamentTop.y = y + 13;
+         y += 26 + 14;
+         gameTitle.y = y;
+         y += gameTitle.height + 10;
+         ornamentBottom.y = y + 13;
+         y += 26 + 30;
          screenTitle.y = y;
-         y += screenTitle.height + 12;
+         y += screenTitle.height + 10;
          if (screenBody.visible)
          {
             screenBody.y = y;
-            y += screenBody.height + 20;
+            y += screenBody.height + 26;
          }
          if (progressTrack.visible)
          {
             var tg:Graphics = progressTrack.graphics;
             tg.clear();
-            tg.beginFill(TRACK);
-            tg.drawRoundRect(0, 0, BAR_WIDTH, 8, 8, 8);
+            tg.beginFill(WHITE, 0.16);
+            tg.drawRoundRect(0, 0, BAR_WIDTH, 6, 6, 6);
             tg.endFill();
             drawProgress();
-            progressTrack.y = y;
-            y += 8 + 28;
+            progressTrack.y = y + 8;
+            y += 6 + 34;
          }
          if (buttons.visible)
          {
             buttons.y = y;
-            y += 40 + 24;
+            y += 52 + 26;
          }
          if (screenDetail.visible)
          {
             screenDetail.y = y;
-            y += screenDetail.height + 16;
+            y += screenDetail.height;
          }
-         var cardHeight:Number = y + 12;
-         var cardX:Number = Math.round((w - cardWidth) / 2);
-         var cardY:Number = Math.max(24, Math.round((h - cardHeight) / 2));
-
-         var g:Graphics = screen.graphics;
-         g.clear();
-         g.beginFill(BACKGROUND);
-         g.drawRect(0, 0, w, h);
-         g.endFill();
-         g.lineStyle(1, CARD_EDGE);
-         g.beginFill(CARD);
-         g.drawRoundRect(cardX, cardY, cardWidth, cardHeight, 18, 18);
-         g.endFill();
-
+         var top:Number = Math.max(24, Math.round((h - y) / 2) - 20);
+         var cx:Number = Math.round(w / 2);
+         for each (var part:Object in [ornamentTop, gameTitle, ornamentBottom, screenTitle, screenBody, progressTrack, buttons, screenDetail])
+         {
+            part.y += top;
+         }
+         ornamentTop.x = ornamentBottom.x = cx;
+         gameTitle.x = cx - column / 2;
          for each (var field:TextField in [screenTitle, screenBody, screenDetail])
          {
-            field.x = cardX + 32;
-            field.y += cardY;
+            field.x = cx - text / 2;
          }
-         progressTrack.x = cardX + (cardWidth - BAR_WIDTH) / 2;
-         progressTrack.y += cardY;
-         buttons.x = cardX + (cardWidth - buttons.width) / 2;
-         buttons.y += cardY;
+         progressTrack.x = cx - BAR_WIDTH / 2;
+         buttons.x = cx - buttons.width / 2;
+         credit.width = 400;
+         credit.x = cx - 200;
+         credit.y = h - credit.height - 18;
       }
 
       // ---- full screen and the game's layout ---------------------------------------------------
