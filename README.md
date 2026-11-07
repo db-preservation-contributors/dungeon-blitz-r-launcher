@@ -424,8 +424,9 @@ folder) is the one the Electron launcher wrote, so a player moving from it is no
 | Linux | `x86_64-unknown-linux-gnu` | Flash Player | x86_64, AppImage or .deb |
 
 The window is the system's web view: WebView2 on Windows, WKWebView on macOS, WebKitGTK on
-Linux. The Windows 7 build runs on WebView2 109, the last version for Windows 7; its installer
-sets it up when it is missing.
+Linux. The Windows 7 build runs on WebView2 109, the last version for Windows 7. If WebView2 is missing
+when the launcher starts (the installer could not set it up, or another Windows account
+installed it), the launcher offers to install it from Microsoft before it opens.
 
 **32-bit Windows plays**: `flashplayer_32_sa.exe` is itself a 32-bit program in its own process,
 so it runs on 32-bit and 64-bit Windows alike. The AIR engine is 64-bit, so the ia32 and

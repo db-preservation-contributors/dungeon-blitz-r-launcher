@@ -33,14 +33,44 @@ pub struct Detected {
 
 pub fn detect() -> Detected {
     let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-    let mut system = sysinfo::System::new();
-    system.refresh_memory();
-    let tier = machine_tier(cpus, system.total_memory()).to_string();
+    let tier = machine_tier(cpus, total_memory().unwrap_or(8 * GB)).to_string();
     match software_gpu() {
         Some(true) => Detected { gpu: false, tier, reason: "software GPU driver".into() },
         Some(false) => Detected { gpu: true, tier, reason: "GPU available".into() },
         None => Detected { gpu: true, tier, reason: "GPU status unknown".into() },
     }
+}
+
+/// Installed memory in bytes. Read directly so the launcher needs no system-info crate (the one
+/// it had brought an older `windows` crate whose imports do not exist on Windows 7).
+#[cfg(windows)]
+fn total_memory() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then_some(status.ullTotalPhys)
+}
+
+#[cfg(target_os = "macos")]
+fn total_memory() -> Option<u64> {
+    let mut bytes: u64 = 0;
+    let mut len = std::mem::size_of::<u64>();
+    let ok = unsafe {
+        libc::sysctlbyname(c"hw.memsize".as_ptr(), (&mut bytes as *mut u64).cast(), &mut len, std::ptr::null_mut(), 0)
+    } == 0;
+    ok.then_some(bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn total_memory() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kib: u64 = text.lines().find(|l| l.starts_with("MemTotal:"))?.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+fn total_memory() -> Option<u64> {
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -101,6 +131,13 @@ pub fn flash_quality(quality: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    fn reads_installed_memory() {
+        let bytes = total_memory().expect("total memory");
+        assert!(bytes >= 512 * 1024 * 1024 && bytes < 1 << 50, "{bytes}");
+    }
 
     #[test]
     fn tiers() {

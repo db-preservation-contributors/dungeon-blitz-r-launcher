@@ -50,8 +50,14 @@ fingerprints are compiled into the binary by `build.rs`.
 | macOS | `x86_64-apple-darwin` | AIR |
 | Linux | `x86_64-unknown-linux-gnu` | Flash Player |
 
-The Windows 7 build runs on WebView2 109, the last version for Windows 7; the installer sets it
-up when it is missing. `.github/workflows/rust-launcher.yml` builds all of them.
+The Windows 7 build runs on WebView2 109, the last version for Windows 7. Its executable is built
+with `--cfg windows_slim_errors` and `+crt-static`, then `tools/win7-imports.js` renames the
+`combase.dll` import (Windows 8+) to `ole32.dll` and fails the build if anything it imports is
+missing on Windows 7.
+
+On every Windows build the launcher checks for WebView2 before it opens its window
+(`src/webview2.rs`); when the runtime is missing it offers to download and run Microsoft's
+bootstrapper, which installs the current runtime on Windows 10/11 and 109 on 7/8/8.1. `.github/workflows/rust-launcher.yml` builds all of them.
 
 ## Releases
 

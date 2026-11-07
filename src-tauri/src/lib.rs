@@ -15,6 +15,8 @@ mod presence;
 mod social;
 mod title;
 mod update;
+#[cfg(windows)]
+mod webview2;
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -1166,6 +1168,10 @@ fn log_panics() {
 
 pub fn run() {
     log_panics();
+    #[cfg(windows)]
+    if !webview2::ensure() {
+        return;
+    }
     if let Some(dir) = dirs::config_dir() {
         let saved = StateStore::new(&dir.join(config::APP_DIRECTORY_NAME)).read();
         if saved.renderer == "cpu" {
