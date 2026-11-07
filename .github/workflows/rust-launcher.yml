@@ -59,7 +59,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev patchelf libgtk2.0-0 libnss3
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev patchelf libgtk2.0-0 libnss3 squashfs-tools
 
       - name: Set up Rust (stable)
         if: matrix.toolchain == 'stable'
@@ -147,8 +147,15 @@ jobs:
             mac-x64)
               tools/mac-vendor.sh "$(ls -d $bundle/macos/*.app | head -1)" "$PWD/$out/$prefix-mac-x64.dmg" ;;
             linux)
-              cp "$(ls $bundle/appimage/*.AppImage | head -1)" "$out/$prefix-linux-x86_64.AppImage"
-              cp "$(ls $bundle/deb/*.deb | head -1)" "$out/$prefix-linux-amd64.deb" ;;
+              # linuxdeploy patches flashplayer and the preload libraries inside the AppImage, so
+              # the launcher's fingerprint check refused them (1.12.0). Put the originals back.
+              tools/appimage-vendor.sh "$(ls $bundle/appimage/*.AppImage | head -1)" "$out/$prefix-linux-x86_64.AppImage"
+              deb="$(ls $bundle/deb/*.deb | head -1)"
+              check=$(mktemp -d) && dpkg-deb -x "$deb" "$check"
+              vendor="$check/usr/lib/$(node -p "require('./src-tauri/tauri.conf.json').productName")/vendor"
+              node tools/verify-projector.js "$vendor/projector/linux/flashplayer" --platform linux
+              node tools/build-flash-preload.js --check "$vendor/flashpreload/linux"
+              cp "$deb" "$out/$prefix-linux-amd64.deb" ;;
           esac
           ls -la $out
 

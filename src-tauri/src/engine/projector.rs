@@ -225,6 +225,33 @@ pub fn verify_flash_preload(directory: &Path) -> integrity::Verdict {
     integrity::verify_tree(directory, integrity::PRELOAD_RECORD, "Flash Player preload")
 }
 
+/// What apprun-hooks/linuxdeploy-plugin-gtk.sh sets when the launcher runs from its AppImage.
+const APPIMAGE_GTK_ENV: [&str; 9] = [
+    "GTK_DATA_PREFIX",
+    "GTK_THEME",
+    "GSETTINGS_SCHEMA_DIR",
+    "GI_TYPELIB_PATH",
+    "GIO_MODULE_DIR",
+    "GTK_EXE_PREFIX",
+    "GTK_PATH",
+    "GTK_IM_MODULE_FILE",
+    "GDK_PIXBUF_MODULE_FILE",
+];
+
+/// Changes to a game's environment when the launcher runs from its AppImage (`None` removes the
+/// variable). The AppImage's GTK hook points GTK at the GTK 3 files inside the AppImage, and
+/// the launcher's children inherit that. Flash Player is a GTK 2 program on the host's own
+/// libraries: GTK 3 input modules from GTK_IM_MODULE_FILE in a GTK 2 process make it abort.
+pub fn appimage_env(get: impl Fn(&str) -> Option<String>) -> Vec<(String, Option<String>)> {
+    let Some(appdir) = get("APPDIR").filter(|d| PLATFORM == "linux" && !d.is_empty()) else { return vec![] };
+    let mut changes: Vec<(String, Option<String>)> = APPIMAGE_GTK_ENV.iter().map(|k| (k.to_string(), None)).collect();
+    if let Some(dirs) = get("XDG_DATA_DIRS") {
+        let host = dirs.split(':').filter(|d| !d.is_empty() && !d.starts_with(&appdir)).collect::<Vec<_>>().join(":");
+        changes.push(("XDG_DATA_DIRS".into(), Some(host).filter(|h| !h.is_empty())));
+    }
+    changes
+}
+
 pub fn linux_env(preload: Option<&Preload>) -> Vec<(String, String)> {
     let mut env = Vec::new();
     if !env_is("DUNGEON_BLITZ_FLASH_VDPAU", "1") {
@@ -291,5 +318,26 @@ mod tests {
             default_swf_url("http://dungeonblitzr.theminesa.studio/"),
             "http://dungeonblitzr.theminesa.studio/p/cbp/DungeonBlitz.swf?fv=cbp&gv=cbp"
         );
+    }
+
+    #[test]
+    fn appimage_gtk_env_is_not_passed_to_flash_player() {
+        let outside = |k: &str| (k == "XDG_DATA_DIRS").then(|| "/usr/share".to_string());
+        assert!(appimage_env(outside).is_empty());
+
+        let appimage = |k: &str| match k {
+            "APPDIR" => Some("/tmp/.mount_Dungeon".to_string()),
+            "XDG_DATA_DIRS" => Some("/tmp/.mount_Dungeon/usr/share:/usr/share:/usr/local/share".to_string()),
+            "GTK_IM_MODULE_FILE" => Some("/tmp/.mount_Dungeon//usr/lib/gtk-3.0/3.0.0/immodules.cache".to_string()),
+            _ => None,
+        };
+        let changes = appimage_env(appimage);
+        if PLATFORM != "linux" {
+            assert!(changes.is_empty());
+            return;
+        }
+        assert!(changes.contains(&("GTK_IM_MODULE_FILE".into(), None)));
+        assert!(changes.contains(&("GTK_PATH".into(), None)));
+        assert!(changes.contains(&("XDG_DATA_DIRS".into(), Some("/usr/share:/usr/local/share".into()))));
     }
 }
