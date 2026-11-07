@@ -38,7 +38,6 @@ const { boostFlashTimer } = require('./lib/flashTimer');
 const { describeWindows, unsupportedArchitectureMessage, unsupportedWindowsMessage } = require('./lib/windowsSupport');
 const { PresenceBridge } = require('./lib/presence');
 const { SocialBridge } = require('./lib/social');
-const { createUpdateService } = require('./lib/update');
 const {
     createUpdateNoticeService,
     electronFetch,
@@ -145,11 +144,9 @@ function graphicsSummary() {
 });
 const sessionCache = createSessionCache(path.join(app.getPath('userData'), 'launcher-session.json'));
 
-// Auto-update: GitHub releases are the feed (build.publish in package.json points
-// electron-updater at them). Dev checkouts and dev AppImages never self-update, and the
-// service itself is inert unless app.isPackaged. Builds electron-updater cannot install
-// (macOS, the portable .exe, the ia32 setup) get lib/updateNotice.js instead: the same
-// schedule, and a download link rather than an install.
+// Updates: this is the last Electron launcher, so the only thing it looks for is the new
+// (Rust) launcher in the GitHub releases (build.publish in package.json), offered with a
+// download link (lib/updateNotice.js, newLauncher). Checkouts never check.
 let updateService = null;
 
 // Rich presence is served by the launcher itself. The multiplayer server's own bridge
@@ -1635,38 +1632,30 @@ if (instrumentation) {
         packageType: app.isPackaged ? readPackageType(process.resourcesPath) : '',
         legacyWindows: windows.legacy
     });
-    if (route.mode === 'notice') {
+    // 1.11.5 is the last Electron launcher. Every installed build, including the ones
+    // electron-updater used to update in place, now only looks for the new (Rust) launcher and
+    // offers its installer with the Download button. electron-updater is not armed: the next
+    // release is the Rust one, which carries no latest.yml for it to install.
+    if (route.mode !== 'off') {
         const feed = resolvePublishTarget({ packageJson: require('./package.json'), resourcesPath: process.resourcesPath });
         if (feed) {
-            console.log(`[Update] This build cannot install updates (${route.reason}); new releases are announced with a download link.`);
+            console.log('[Update] This is the last Electron launcher; looking for the new launcher to offer.');
             updateService = createUpdateNoticeService({
-                // Electron's own stack, so a system proxy applies as it does for electron-updater.
+                // Electron's own stack, so a system proxy applies.
                 fetch: (url, init) => app.whenReady().then(() => electronFetch(net)(url, init)),
                 app,
                 owner: feed.owner,
                 repo: feed.repo,
                 build: route.build,
                 arch: process.arch,
-                log: (message) => console.log(message)
+                log: (message) => console.log(message),
+                newLauncher: true
             });
             updateService.on('state', () => pushState());
             updateService.start();
         } else {
-            console.warn('[Update] No GitHub release feed in build.publish or app-update.yml; not checking for updates.');
+            console.warn('[Update] No GitHub release feed in build.publish or app-update.yml; not checking for the new launcher.');
         }
-    } else if (route.mode === 'install') {
-        const { autoUpdater } = require('electron-updater');
-        autoUpdater.autoDownload = true;
-        // The floor: if the player ignores the restart prompt, the update still lands on
-        // the next quit. The prompt itself is never a forced restart (game may be open).
-        autoUpdater.autoInstallOnAppQuit = true;
-        updateService = createUpdateService({
-            autoUpdater,
-            app,
-            log: (message) => console.log(message)
-        });
-        updateService.on('state', () => pushState());
-        updateService.start();
     }
     registerIpc();
 

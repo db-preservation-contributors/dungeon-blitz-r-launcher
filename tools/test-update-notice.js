@@ -28,6 +28,8 @@ const {
     isAllowedDownloadUrl,
     openUpdateDownload,
     pickAsset,
+    pickNewLauncherAsset,
+    pickNewLauncherRelease,
     readPackageType,
     resolvePublishTarget,
     updateRoute
@@ -586,6 +588,92 @@ function testConstruction() {
     assert.throws(() => createUpdateNoticeService({ fetch: () => {}, owner: '', repo: REPO }), /owner and repo/);
 }
 
+function rustRelease(version, extra = {}) {
+    return release(version, {
+        names: [
+            `DungeonBlitzR-Launcher-${version}-mac-x64.dmg`,
+            `DungeonBlitzR-Launcher-${version}-win-x64-setup.exe`,
+            `DungeonBlitzR-Launcher-${version}-win-ia32-setup.exe`,
+            `DungeonBlitzR-Launcher-${version}-win7-x64-setup.exe`,
+            `DungeonBlitzR-Launcher-${version}-win7-ia32-setup.exe`,
+            `DungeonBlitzR-Launcher-${version}-linux-x86_64.AppImage`,
+            `DungeonBlitzR-Launcher-${version}-linux-amd64.deb`
+        ],
+        ...extra
+    });
+}
+
+async function testNewLauncher() {
+    // The newest published release from 1.12.0 on, whatever GitHub calls "latest".
+    const list = [
+        release('1.11.5'),
+        rustRelease('1.12.1', { draft: true }),
+        rustRelease('1.13.0-beta.1', { prerelease: true }),
+        rustRelease('1.12.0'),
+        release('1.11.3')
+    ];
+    assert.strictEqual(pickNewLauncherRelease(list).tag_name, 'v1.12.0');
+    assert.strictEqual(pickNewLauncherRelease([release('1.11.5'), release('1.11.4')]), null);
+    assert.strictEqual(pickNewLauncherRelease('nope'), null);
+
+    // Every Electron build gets the Rust installer for its Windows, architecture or package.
+    const assets = rustRelease('1.12.0').assets;
+    const pick = (build, arch = 'x64') => (pickNewLauncherAsset(assets, { build, arch }) || {}).name || null;
+    assert.strictEqual(pick('mac'), 'DungeonBlitzR-Launcher-1.12.0-mac-x64.dmg');
+    assert.strictEqual(pick('mac', 'arm64'), 'DungeonBlitzR-Launcher-1.12.0-mac-x64.dmg');
+    assert.strictEqual(pick('win-setup'), 'DungeonBlitzR-Launcher-1.12.0-win-x64-setup.exe');
+    assert.strictEqual(pick('win-portable', 'ia32'), 'DungeonBlitzR-Launcher-1.12.0-win-ia32-setup.exe');
+    assert.strictEqual(pick('win7-portable'), 'DungeonBlitzR-Launcher-1.12.0-win7-x64-setup.exe');
+    assert.strictEqual(pick('win7-setup', 'ia32'), 'DungeonBlitzR-Launcher-1.12.0-win7-ia32-setup.exe');
+    assert.strictEqual(pick('linux-appimage'), 'DungeonBlitzR-Launcher-1.12.0-linux-x86_64.AppImage');
+    assert.strictEqual(pick('linux'), 'DungeonBlitzR-Launcher-1.12.0-linux-x86_64.AppImage');
+    assert.strictEqual(pick('linux-deb'), 'DungeonBlitzR-Launcher-1.12.0-linux-amd64.deb');
+
+    const make = (answer, build = 'win-setup') =>
+        createUpdateNoticeService({
+            fetch: fakeFetch(answer),
+            app: { getVersion: () => '1.11.5' },
+            owner: OWNER,
+            repo: REPO,
+            build,
+            arch: 'x64',
+            newLauncher: true
+        });
+
+    // Before the Rust launcher is published: nothing is offered.
+    const early = make([release('1.11.5'), rustRelease('1.12.0', { draft: true })]);
+    let summary = await early.checkNow();
+    assert.strictEqual(summary.mode, 'new-launcher');
+    assert.strictEqual(summary.state, 'not-available');
+    assert.strictEqual(early.downloadUrl(), '');
+
+    // Once it is: its installer is offered, and the list endpoint is what was asked.
+    const fetch = fakeFetch(list);
+    const ready = createUpdateNoticeService({
+        fetch,
+        app: { getVersion: () => '1.11.5' },
+        owner: OWNER,
+        repo: REPO,
+        build: 'win-setup',
+        arch: 'x64',
+        newLauncher: true
+    });
+    summary = await ready.checkNow();
+    assert.strictEqual(fetch.calls[0].url, `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=50`);
+    assert.strictEqual(summary.state, 'available');
+    assert.strictEqual(summary.version, '1.12.0');
+    assert.strictEqual(summary.asset, 'DungeonBlitzR-Launcher-1.12.0-win-x64-setup.exe');
+    assert.strictEqual(ready.downloadUrl(), `${RELEASE_BASE}/releases/download/v1.12.0/DungeonBlitzR-Launcher-1.12.0-win-x64-setup.exe`);
+    assert.strictEqual(ready.restartToUpdate(), false);
+
+    // A failed request stays quiet, as with the ordinary notice.
+    const failing = make(() => Promise.resolve({ ok: false, status: 403, json: async () => ({}) }));
+    summary = await failing.checkNow();
+    assert.notStrictEqual(summary.state, 'available');
+
+    console.log('[test-update-notice] the last Electron launcher offers the newest Rust launcher: OK');
+}
+
 async function main() {
     testRoutes();
     testFeed();
@@ -599,6 +687,7 @@ async function main() {
     await testDownloadIpc();
     await testElectronFetch();
     testConstruction();
+    await testNewLauncher();
     console.log('[test-update-notice] all assertions passed');
 }
 
