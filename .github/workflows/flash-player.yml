@@ -11,8 +11,6 @@ on:
       - "tools/fetch-projector.js"
       - "lib/projector.js"
       - "lib/loaderSwf.js"
-      - "lib/windowTitle.js"
-      - "tools/check-window-title.js"
       - ".github/workflows/flash-player.yml"
   workflow_dispatch:
 
@@ -67,8 +65,3 @@ jobs:
           codesign -dvv "vendor/projector/darwin/Flash Player.app" 2>&1 | grep -E 'Authority|Identifier|TeamIdentifier' || true
           lipo -info "vendor/projector/darwin/Flash Player.app/Contents/MacOS/"* || true
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "vendor/projector/darwin/Flash Player.app/Contents/Info.plist"
-
-      - name: 'The game window reads "Dungeon Blitz: R"'
-        if: matrix.platform != 'linux'
-        shell: bash
-        run: node tools/check-window-title.js

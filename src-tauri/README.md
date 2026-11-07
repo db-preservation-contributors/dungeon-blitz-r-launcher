@@ -1,8 +1,8 @@
 # Dungeon Blitz: R launcher (Rust)
 
-The launcher rewritten in Rust on [Tauri 2](https://tauri.app). It reuses the launcher window in
-`../renderer/` unchanged: `src/shim.js` gives that page the same `window.launcher` calls the
-Electron preload did, answered by the Rust side.
+The launcher, in Rust on [Tauri 2](https://tauri.app). Its window is the page in `../renderer/`:
+`src/shim.js` gives that page its `window.launcher` calls, answered by the Rust side. It replaced
+the Electron launcher, whose last release was 1.11.5.
 
 ```bash
 cargo install tauri-cli --version "^2" --locked
@@ -11,15 +11,15 @@ cargo tauri build        # installers in target/release/bundle/
 cargo test
 ```
 
-Engines come from the same tools as before (`node tools/fetch-projector.js`,
+Engines come from the Node tools in `../tools/` (`node tools/fetch-projector.js`,
 `node tools/build-air.js`, `node tools/build-flash-preload.js`). Their `lib/*.integrity.json`
 fingerprints are compiled into the binary by `build.rs`.
 
-## Ported
+## What it does
 
-- Window, state shape and every status row, unchanged UI
+- Window, state shape and every status row
 - `servers.json` (same format) and `launcher-state.json` in the same user-data folder, so a
-  player's saved sign-in carries over from the Electron launcher
+  player's saved sign-in carried over from the Electron launcher
 - Discord sign-in in the browser with the launcher key and login code, device token
   resume/forget, account polling and token recovery from an in-game sign-in
 - AIR engine and standalone Flash Player, fingerprint checks before every game, the loader SWF,
@@ -55,9 +55,8 @@ up when it is missing. `.github/workflows/rust-launcher.yml` builds all of them.
 
 ## Releases
 
-The Rust launcher's version is the `version` in `tauri.conf.json`, not `package.json`:
-`package.json` stays the Electron launcher's, and bumping it on `main` starts the Electron
-Release workflow. Rust versions start at 1.12.0 so their tags never meet an Electron one.
+The launcher's version is the `version` in `tauri.conf.json`, not `package.json` (which only
+names the Node build tools). Versions start at 1.12.0, after the Electron launcher's last tag.
 
 To make a release, raise the version in `tauri.conf.json`, then run the **Rust launcher**
 workflow by hand (Actions, Run workflow, on `main`). It builds every installer and attaches
