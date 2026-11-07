@@ -184,6 +184,10 @@ function engineRows(state) {
         widgetDetail = 'Disabled with DUNGEON_BLITZ_GAME_STATS=0.';
     } else if (widget.state === 'syncing') {
         widgetValue = 'writing...';
+    } else if (widget.state === 'signing-in') {
+        widgetValue = 'waiting for Discord sign-in';
+        widgetTone = 'warn';
+        widgetDetail = widget.lastError;
     } else if (widget.state === 'written') {
         const writtenAt = widget.updatedAt ? new Date(widget.updatedAt).toLocaleTimeString() : '';
         widgetValue = 'profile written';

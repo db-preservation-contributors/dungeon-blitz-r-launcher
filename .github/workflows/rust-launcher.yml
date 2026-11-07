@@ -1,0 +1,212 @@
+name: Rust launcher
+
+on:
+  push:
+    branches: [main]
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', '.github/workflows/rust-launcher.yml']
+  pull_request:
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', '.github/workflows/rust-launcher.yml']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Attach the installers to a DRAFT GitHub release (never published here)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+  build:
+    name: ${{ matrix.label }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, label: Windows x64, platform: win32, target: x86_64-pc-windows-msvc, toolchain: stable, air: true, name: win-x64 }
+          - { os: windows-latest, label: Windows ia32, platform: win32, target: i686-pc-windows-msvc, toolchain: stable, name: win-ia32 }
+          - { os: windows-2022, label: Windows 7 x64, platform: win32, target: x86_64-win7-windows-msvc, bundle_target: x86_64-pc-windows-msvc, toolchain: nightly, win7: true, name: win7-x64 }
+          - { os: windows-2022, label: Windows 7 ia32, platform: win32, target: i686-win7-windows-msvc, bundle_target: i686-pc-windows-msvc, toolchain: nightly, win7: true, name: win7-ia32 }
+          - { os: macos-15-intel, label: macOS, platform: darwin, target: x86_64-apple-darwin, toolchain: stable, air: true, name: mac-x64 }
+          - { os: ubuntu-22.04, label: Linux, platform: linux, target: x86_64-unknown-linux-gnu, toolchain: stable, name: linux }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev patchelf libgtk2.0-0 libnss3
+
+      - name: Set up Rust (stable)
+        if: matrix.toolchain == 'stable'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Set up Rust (nightly, Windows 7 targets are built from source)
+        if: matrix.toolchain == 'nightly'
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: ${{ matrix.bundle_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Fetch Flash Player
+        shell: bash
+        run: node tools/fetch-projector.js --platform ${{ matrix.platform }}
+
+      - name: Build the Flash Player preload
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: node tools/build-flash-preload.js --platform linux
+
+      - name: Set up Java for the AIR SDK
+        if: matrix.air
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build the AIR engine
+        if: matrix.air
+        shell: bash
+        run: |
+          sdk=$(node tools/fetch-air-sdk.js --platform ${{ matrix.platform }} | tail -1)
+          AIR_SDK_HOME="$sdk" node tools/build-air.js
+
+      - name: Check the game engine
+        shell: bash
+        run: |
+          arch=x64
+          case "${{ matrix.target }}" in i686-*) arch=ia32 ;; esac
+          node tools/preflight.js --platform ${{ matrix.platform }} --arch $arch --engine ${{ matrix.air && 'air' || 'flash' }}
+
+      - name: Build installers
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+          NO_STRIP: true
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          mkdir -p vendor
+          if [ "${{ matrix.win7 }}" = "true" ]; then
+            # Tier-3 targets are not in `rustup target list`, which the Tauri CLI checks, so the
+            # binary is built with cargo and bundled as the matching regular Windows target.
+            (cd src-tauri && cargo fetch --locked)
+            arch=x86_64; case "${{ matrix.target }}" in i686-*) arch=i686 ;; esac
+            for d in "$CARGO_HOME"/registry/src/*/windows_${arch}_msvc-*/lib; do RUSTFLAGS="$RUSTFLAGS -L native=$(cygpath -m "$d")"; done
+            export RUSTFLAGS
+            (cd src-tauri && cargo build --release --locked --target ${{ matrix.target }} --features win7,custom-protocol -Zbuild-std=std,panic_abort)
+            mkdir -p src-tauri/target/${{ matrix.bundle_target }}/release
+            cp src-tauri/target/${{ matrix.target }}/release/dungeon-blitz-r-launcher.exe src-tauri/target/${{ matrix.bundle_target }}/release/
+            npx --yes @tauri-apps/cli@2 bundle --target ${{ matrix.bundle_target }} --bundles nsis
+          else
+            npx --yes @tauri-apps/cli@2 build --verbose --target ${{ matrix.target }}
+          fi
+
+      - name: Name the installers
+        shell: bash
+        run: |
+          # The Rust launcher has its own version (src-tauri/tauri.conf.json). package.json stays
+          # the Electron launcher's: bumping it on main starts the Electron Release workflow.
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          bundle=src-tauri/target/${{ matrix.bundle_target || matrix.target }}/release/bundle
+          out=dist-rs
+          mkdir -p $out
+          prefix="DungeonBlitzR-Launcher-$version"
+          case "${{ matrix.name }}" in
+            win*) cp "$(ls $bundle/nsis/*-setup.exe | head -1)" "$out/$prefix-${{ matrix.name }}-setup.exe" ;;
+            mac-x64)
+              tools/mac-vendor.sh "$(ls -d $bundle/macos/*.app | head -1)" "$PWD/$out/$prefix-mac-x64.dmg" ;;
+            linux)
+              cp "$(ls $bundle/appimage/*.AppImage | head -1)" "$out/$prefix-linux-x86_64.AppImage"
+              cp "$(ls $bundle/deb/*.deb | head -1)" "$out/$prefix-linux-amd64.deb" ;;
+          esac
+          ls -la $out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-launcher-${{ matrix.name }}
+          path: dist-rs/*
+          if-no-files-found: error
+
+  release:
+    # One draft release with every build's installers. Nothing here publishes it: a person
+    # reads it and presses Publish. The tag is v<tauri.conf.json version>, which starts at
+    # 1.12.0 so it never meets an Electron tag (1.11.x). update.rs finds a new version through
+    # GitHub's latest release and picks the installer by the names "Name the installers" gives.
+    name: Draft release
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rust-launcher-*
+          path: dist-rs
+          merge-multiple: true
+
+      - name: Create or update the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          tag="v$version"
+          ls -la dist-rs
+          for name in mac-x64.dmg win-x64-setup.exe win-ia32-setup.exe win7-x64-setup.exe win7-ia32-setup.exe linux-x86_64.AppImage linux-amd64.deb; do
+            test -f "dist-rs/DungeonBlitzR-Launcher-$version-$name" || { echo "::error::missing DungeonBlitzR-Launcher-$version-$name"; exit 1; }
+          done
+          state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          if [ "$state" = "false" ]; then
+            echo "::error::$tag is already published. Raise the version in src-tauri/tauri.conf.json."
+            exit 1
+          fi
+          notes="Dungeon Blitz: R launcher $version, the Rust launcher. Built from $GITHUB_SHA by run $GITHUB_RUN_ID.
+
+          - macOS: DungeonBlitzR-Launcher-$version-mac-x64.dmg
+          - Windows 10/11: win-x64-setup.exe (64-bit) or win-ia32-setup.exe (32-bit)
+          - Windows 7/8/8.1: win7-x64-setup.exe or win7-ia32-setup.exe
+          - Linux: linux-x86_64.AppImage or linux-amd64.deb"
+          if [ "$state" = "true" ]; then
+            echo "Draft $tag exists; replacing its installers."
+            gh release upload "$tag" dist-rs/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$tag" --draft --target "$GITHUB_SHA" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist-rs/* --draft --target "$GITHUB_SHA" \
+              --title "$version (Rust launcher)" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+          fi
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'

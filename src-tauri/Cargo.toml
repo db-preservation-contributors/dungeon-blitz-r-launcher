@@ -1,0 +1,52 @@
+[package]
+name = "dungeon-blitz-r-launcher"
+version = "2.0.0-alpha.1"
+description = "Dungeon Blitz: R launcher"
+authors = ["The Minesa Studios"]
+license-file = "../LICENSE"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "process", "fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+base64 = "0.22"
+dirs = "5"
+log = "0.4"
+regex = "1"
+tiny_http = "0.12"
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+[features]
+win7 = []
+custom-protocol = ["tauri/custom-protocol"]

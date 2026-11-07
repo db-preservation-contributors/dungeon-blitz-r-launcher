@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dungeon Blitz R",
+  "version": "1.12.0",
+  "identifier": "studio.theminesa.dungeonblitzr.launcher",
+  "build": {
+    "frontendDist": "../renderer"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "app", "dmg", "appimage", "deb"],
+    "publisher": "The Minesa Studios",
+    "category": "Game",
+    "shortDescription": "Dungeon Blitz: R launcher",
+    "copyright": "The Minesa Studios",
+    "icon": ["../build/icon.png", "../build/icon.ico", "../build/icon.icns"],
+    "resources": {
+      "../servers.json": "servers.json",
+      "../presence.config.json": "presence.config.json",
+      "../social.config.json": "social.config.json",
+      "../vendor/": "vendor/"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}
