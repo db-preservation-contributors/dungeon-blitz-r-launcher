@@ -1005,7 +1005,7 @@ async function play({ engine: requested = '', serverId = '' } = {}) {
         presence.stop();
         chatRelay.stop();
         gameStats.stop();
-    }
+        }
     pushState();
     return launched;
 }
