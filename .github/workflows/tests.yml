@@ -1,9 +1,8 @@
 name: Tests
 
-# The launcher's guards are the parts a player never sees fail: the Flash start guard, the
-# rich-presence mapping, the chat mirror and the window's status rows. Each of them used to
-# be checkable only by hand, which is how a broken build shipped. They run here on every
-# push, before any installer is built.
+# The Node checks the Rust launcher still relies on: the window's status rows (renderer/), the
+# Linux Flash Player preload and the AIR engine bundle. The Rust side's own tests run in the
+# Rust launcher workflow (cargo test). These need no npm packages, so nothing is installed.
 
 on:
   push:
@@ -16,38 +15,18 @@ permissions:
 
 jobs:
   suites:
-    name: Launcher test suites (Node ${{ matrix.node }})
+    name: Launcher test suites
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 22 for the main builds' Electron. 16 for the Windows 7 build's: Electron 22 runs the
-        # launcher on Node 16, which has no global fetch, WebSocket or AbortSignal.timeout.
-        node: [22, 16]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # The suites drive modules directly and never read Flash Player or the
-          # prebuilt bridges, so pulling the LFS objects buys nothing here.
           lfs: false
 
-      # Always installed with Node 22: Electron 41's install script and electron-builder's
-      # dependencies need Node 18 or later. Only the suites run on the matrix Node.
-      - name: Set up Node 22 to install
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Set up Node ${{ matrix.node }} to run the suites
-        if: matrix.node != 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-
-      # Electron's binary is not needed by the suites: they drive the modules directly.
       - name: Run test suites
         run: npm test
