@@ -47,7 +47,16 @@ struct Config {
     scopes: Vec<String>,
     poll_ms: u64,
     discord_ipc: bool,
+    executable_path: String,
+    js_bridge: bool,
+    native_bridge: bool,
+    device_flow: bool,
 }
+
+#[cfg(windows)]
+const EXECUTABLE_NAME: &str = "discord_social_bridge.exe";
+#[cfg(not(windows))]
+const EXECUTABLE_NAME: &str = "discord_social_bridge";
 
 #[derive(Default)]
 struct Session {
@@ -66,6 +75,7 @@ pub struct Social {
     session: Arc<Mutex<Session>>,
     task: Arc<StdMutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
     sink: Arc<StdMutex<Option<ChatSink>>>,
+    native: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
 }
 
 impl Social {
@@ -77,6 +87,7 @@ impl Social {
             session: Arc::default(),
             task: Arc::default(),
             sink: Arc::default(),
+            native: Arc::default(),
         }
     }
 
@@ -136,11 +147,39 @@ impl Social {
             scopes,
             poll_ms: base.get("pollIntervalMs").and_then(Value::as_u64).filter(|v| *v > 0).unwrap_or(2000),
             discord_ipc: base.get("discordIpc") != Some(&Value::Bool(false)),
+            executable_path: pick("executablePath"),
+            js_bridge: base.get("jsBridge") != Some(&Value::Bool(false)),
+            native_bridge: base.get("nativeBridge") == Some(&Value::Bool(true)),
+            device_flow: base.get("deviceFlow") == Some(&Value::Bool(true)),
         }
     }
 
     pub fn available(&self) -> bool {
-        !self.read_config().app_id.is_empty()
+        let config = self.read_config();
+        !config.app_id.is_empty() && self.driver(&config) != "none"
+    }
+
+    fn executable(&self, configured: &str) -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+        if !configured.is_empty() {
+            candidates.push(PathBuf::from(configured));
+        }
+        candidates.push(self.paths.vendor("social").join(EXECUTABLE_NAME));
+        let build = self.paths.server_root.join("native_bridge").join("build");
+        candidates.push(build.join(EXECUTABLE_NAME));
+        candidates.push(build.join("Release").join(EXECUTABLE_NAME));
+        candidates.into_iter().find(|p| p.is_file())
+    }
+
+    fn driver(&self, config: &Config) -> &'static str {
+        let native = self.executable(&config.executable_path).is_some();
+        if !config.js_bridge {
+            return if native { "native" } else { "none" };
+        }
+        if config.native_bridge && native {
+            return "native";
+        }
+        "js"
     }
 
     pub fn start(&self, server_url: String, token_fn: TokenFn) {
@@ -149,6 +188,24 @@ impl Social {
             return;
         }
         let me = self.clone();
+        let config = self.read_config();
+        match self.driver(&config) {
+            "none" => {
+                self.status("Native Social SDK bridge binary not found.");
+                return;
+            }
+            "native" => {
+                self.patch(|s| {
+                    s.running = true;
+                    s.last_status = "Native bridge starting...".into();
+                });
+                *task = Some(tauri::async_runtime::spawn(async move {
+                    me.run_native(config).await;
+                }));
+                return;
+            }
+            _ => {}
+        }
         self.patch(|s| {
             s.running = true;
             s.last_status = "JavaScript social bridge starting...".into();
@@ -162,12 +219,133 @@ impl Social {
         if let Some(task) = self.task.lock().unwrap().take() {
             task.abort();
         }
+        if let Ok(mut stdin) = self.native.try_lock() {
+            stdin.take();
+        }
         self.patch(|s| {
             s.running = false;
             s.lobby_ready = false;
             s.linked_lobby = false;
             s.auth_pending = false;
         });
+    }
+
+    async fn run_native(&self, config: Config) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        if config.app_id.is_empty() {
+            self.status("discord-social-bridge.config.json has no appId.");
+            return;
+        }
+        let Some(exe) = self.executable(&config.executable_path) else {
+            self.status("Native Social SDK bridge binary not found.");
+            return;
+        };
+        let mut command = tokio::process::Command::new(&exe);
+        command
+            .current_dir(exe.parent().unwrap_or(&self.paths.data_dir))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        command.creation_flags(0x0800_0000);
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                self.patch(|s| s.running = false);
+                self.status(e.to_string());
+                return;
+            }
+        };
+        let mut stdin = child.stdin.take();
+        let initialize = json!({
+            "type": "initialize",
+            "appId": config.app_id,
+            "channelId": config.channel_id,
+            "lobbySecret": config.lobby_secret,
+            "deviceFlow": config.device_flow,
+            "gameWindowPid": 0,
+            "enableChannelLinking": config.channel_linking,
+            "tokenCachePath": self.token_path().to_string_lossy(),
+        });
+        if let Some(pipe) = stdin.as_mut() {
+            let _ = pipe.write_all(format!("{initialize}\n").as_bytes()).await;
+        }
+        *self.native.lock().await = stdin;
+        if let Some(stderr) = child.stderr.take() {
+            let me = self.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if !line.trim().is_empty() {
+                        me.status(line.trim().to_string());
+                    }
+                }
+            });
+        }
+        if let Some(stdout) = child.stdout.take() {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                self.native_line(&line);
+            }
+        }
+        let code = child.wait().await.ok().and_then(|s| s.code());
+        self.native.lock().await.take();
+        self.patch(|s| {
+            s.running = false;
+            s.lobby_ready = false;
+            s.auth_pending = false;
+        });
+        self.status(format!("Native bridge exited (code {}).", code.map(|c| c.to_string()).unwrap_or("null".into())));
+    }
+
+    fn native_line(&self, line: &str) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        let Ok(payload) = serde_json::from_str::<Value>(line) else {
+            self.status(line.to_string());
+            return;
+        };
+        let text = |key: &str| payload.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+        match payload.get("type").and_then(Value::as_str).unwrap_or("") {
+            "ready" => self.status("Social bridge ready."),
+            "auth" => {
+                self.patch(|s| s.auth_pending = true);
+                self.status("Waiting for Discord authorization.");
+            }
+            "lobby_ready" => {
+                let linked = payload.get("linked") == Some(&Value::Bool(true));
+                let (lobby, username) = (text("lobbyId"), text("username"));
+                self.patch(|s| {
+                    s.lobby_ready = true;
+                    s.auth_pending = false;
+                    s.lobby_id = lobby;
+                    s.linked_lobby = linked;
+                    s.username = username;
+                });
+                self.status("Lobby chat connected.");
+            }
+            "channel_linked" => self.status("Discord channel linked to the lobby."),
+            "channel_link_failed" | "channel_link_conflict" => {
+                let why = [text("summary"), text("error"), text("errorCode")].into_iter().find(|t| !t.is_empty());
+                self.status(format!("Channel link failed: {}", why.unwrap_or_else(|| "unknown error".into())));
+            }
+            "chat" => {
+                let name = Some(text("username")).filter(|n| !n.is_empty()).unwrap_or_else(|| "Discord".into());
+                let sink = self.sink.lock().unwrap().clone();
+                if let Some(sink) = sink {
+                    sink(name, text("message"));
+                }
+            }
+            "send_result" if payload.get("ok") != Some(&Value::Bool(true)) => {
+                let why = Some(text("error")).filter(|e| !e.is_empty()).unwrap_or_else(|| "unknown error".into());
+                self.status(format!("Message was not sent: {why}"));
+            }
+            "status" => self.status(text("text")),
+            _ => {}
+        }
     }
 
     async fn run(&self, server_url: String, token_fn: TokenFn) {
@@ -482,7 +660,18 @@ impl Social {
         if !self.snapshot().lobby_ready {
             return Err("The lobby is not ready yet.".into());
         }
-        let _ = sender;
+        {
+            use tokio::io::AsyncWriteExt;
+            let mut native = self.native.lock().await;
+            if let Some(pipe) = native.as_mut() {
+                let name = Some(sender.trim()).filter(|n| !n.is_empty()).unwrap_or("Player");
+                let line = json!({ "type": "outbound_chat", "senderName": name, "message": text });
+                return pipe
+                    .write_all(format!("{line}\n").as_bytes())
+                    .await
+                    .map_err(|_| "The native bridge is not running.".to_string());
+            }
+        }
         let (token, lobby) = {
             let s = self.session.lock().await;
             (s.token.clone(), s.lobby_id.clone())

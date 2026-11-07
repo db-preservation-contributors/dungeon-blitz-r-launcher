@@ -40,11 +40,8 @@ fingerprints are compiled into the binary by `build.rs`.
   and `src/damage_meter.rs` fetches from the session's server and keeps its files
 - Developer mode: Create (game server checkout behind two cloudflared quick tunnels), Play on my
   server and Join, in AIR (`src/dev.rs`, `src/dev_join.rs`)
-
-## Not yet ported
-
-- The native Social SDK bridge (the JavaScript driver, the default, is ported)
-- `DB_FLASH_TIMER` (off by default in the Electron launcher)
+- The native Social SDK bridge, opt-in with `nativeBridge: true` in social.config.json
+  (`src/social.rs`), and `DB_FLASH_TIMER=1` on Windows (`src/flash_timer.rs`)
 
 ## Builds
 

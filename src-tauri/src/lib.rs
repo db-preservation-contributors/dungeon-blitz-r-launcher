@@ -6,6 +6,7 @@ mod dev;
 mod dev_join;
 mod discord_ipc;
 mod engine;
+mod flash_timer;
 mod game_host;
 mod game_stats;
 mod graphics;
@@ -559,6 +560,7 @@ impl Launcher {
         println!("[Flash] Starting {} {:?} for {swf}", launch.command.display(), launch.args);
         let pid = self.spawn_game("projector", "Flash Player", launch).await?;
         let alive = Arc::new(AtomicBool::new(true));
+        flash_timer::boost(pid);
         title::keep_game_title(pid, alive.clone());
         self.watch_alive(alive);
         Ok(())
