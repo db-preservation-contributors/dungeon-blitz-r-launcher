@@ -2,7 +2,7 @@
 
 The launcher, in Rust on [Tauri 2](https://tauri.app). Its window is the page in `../renderer/`:
 `src/shim.js` gives that page its `window.launcher` calls, answered by the Rust side. It replaced
-the Electron launcher, whose last release was 1.11.5.
+the Electron launcher, whose last release was 1.11.3.
 
 ```bash
 cargo install tauri-cli --version "^2" --locked

@@ -14,8 +14,8 @@ the player's in-game chat into that lobby — in both directions — for as long
 
 The launcher is a Rust program on [Tauri 2](https://tauri.app) (`src-tauri/`). Its window is
 the web page in `renderer/`; `src-tauri/src/shim.js` gives that page its `window.launcher`
-calls, answered by the Rust side. Up to 1.11 the launcher was an Electron app; 1.11.5 was the
-last Electron release, and it points its players to this one.
+calls, answered by the Rust side. Up to 1.11.3 the launcher was an Electron app; a player on
+it installs this one from the Releases page.
 
 ## A free, non-commercial preservation project
 
