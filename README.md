@@ -327,6 +327,14 @@ a supported runtime. A build plays in it whenever `vendor/air/<platform>/` has a
   `Security.allowDomain` and `ExternalInterface`, which throw in AIR.
 - `src-tauri/src/engine/air.rs` finds and starts the bundle; a packaged launcher checks it against
   `lib/air.integrity.json`, like Flash Player.
+- The game SWF is kept on disk (`client-cache/` in the AIR app's storage folder: `Local Store` on
+  macOS, `%APPDATA%\studio.theminesa.dungeonblitzr.air\Local Store` on Windows), named after
+  its URL. The URL's `clientrev` is the SWF's content hash, so a start whose build is already
+  there plays it without downloading it, and a new build is downloaded once and replaces the
+  old one. A URL without a `clientrev` is never kept.
+- While the SWF downloads, the window shows a progress bar. When it cannot be had, it says why
+  in a player's words (server busy, version missing, no connection, a broken download), with
+  **Try again**, an automatic retry after 20 s, and the technical detail underneath.
 
 Building it needs the AIR SDK (free for personal use; download it from
 https://airsdk.harman.com/download after accepting its license). ADT builds only for the system it
