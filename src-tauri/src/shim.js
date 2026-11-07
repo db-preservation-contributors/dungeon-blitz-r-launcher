@@ -18,7 +18,6 @@
         updateInstall: () => call('update_install'),
         updateDownload: () => call('update_download'),
         gameStatsSync: () => call('game_stats_sync'),
-        damageMeterOpen: () => call('damage_meter_open'),
         setGraphics: (settings) => call('set_graphics', { settings: settings || {} }),
         setDevMode: (on) => call('set_dev_mode', { on: on === true }),
         devChooseServer: () => call('dev_choose_server'),

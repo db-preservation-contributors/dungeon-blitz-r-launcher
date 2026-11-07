@@ -1,7 +1,6 @@
 mod auth;
 mod chat_relay;
 mod config;
-mod damage_meter;
 mod dev;
 mod dev_join;
 mod discord_ipc;
@@ -85,7 +84,6 @@ pub struct Launcher {
     updates: update::Updates,
     install: install::InstallLocation,
     dev: dev::DevServer,
-    meter: damage_meter::DamageMeter,
     live: Mutex<Live>,
     push_scheduled: AtomicBool,
     last_pushed: Mutex<String>,
@@ -128,7 +126,6 @@ impl Launcher {
                 updates: update::Updates::new(version.clone(), bus.clone()),
                 install: install::inspect(&exe),
                 dev: dev::DevServer::new(&paths.data_dir, bus.clone()),
-                meter: damage_meter::DamageMeter::new(paths.data_dir.clone(), version.clone(), bus.clone()),
                 presence,
                 social,
                 app,
@@ -272,7 +269,6 @@ impl Launcher {
             },
             "chat": chat,
             "gameStats": stats,
-            "damageMeter": self.meter.summary(),
             "graphics": {
                 "renderer": saved.renderer, "quality": saved.graphics_quality,
                 "resolvedRenderer": resolved.renderer, "resolvedQuality": resolved.quality,
@@ -467,7 +463,6 @@ impl Launcher {
         self.presence.stop().await;
         self.chat.stop();
         self.stats.stop();
-        self.meter.set_session(&self.app, None, "");
     }
 
     async fn end_game_session(self: &L) {
@@ -638,7 +633,6 @@ impl Launcher {
         let result = match launched {
             Ok(()) => {
                 self.host.start(&selected.url, settings.start_discord_bridge).await;
-                self.meter.set_session(&self.app, Some(selected.url.clone()), &self.token());
                 self.start_account_polling();
                 json!({ "ok": true })
             }
@@ -1098,11 +1092,6 @@ async fn dev_join(l: S<'_>, address: Option<String>) -> Result<Value, ()> {
     Ok(l.join_dev(address.as_deref().unwrap_or("")).await)
 }
 
-#[tauri::command]
-fn damage_meter_open(app: AppHandle, l: S) -> bool {
-    l.meter.open(&app)
-}
-
 fn error_box(app: &AppHandle, text: String) {
     app.dialog()
         .message(text)
@@ -1216,16 +1205,6 @@ pub fn run() {
             dev_copy_share,
             dev_play_own,
             dev_join,
-            damage_meter_open,
-            damage_meter::dm_hello,
-            damage_meter::dm_state,
-            damage_meter::dm_http,
-            damage_meter::dm_write_file,
-            damage_meter::dm_save_dialog,
-            damage_meter::dm_clipboard,
-            damage_meter::dm_reveal,
-            damage_meter::dm_error,
-            damage_meter::dm_pin
         ])
         .setup(|app| {
             let handle = app.handle().clone();

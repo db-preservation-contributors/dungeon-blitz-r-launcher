@@ -47,7 +47,6 @@ const statePath = path.join(userData, 'launcher-state.json');
 process.env.DUNGEON_BLITZ_SERVER_ROOT = path.join(scratch, 'no-server-checkout');
 // Nothing that would reach a server or Discord while the fake game runs.
 process.env.DUNGEON_BLITZ_GAME_STATS = '0';
-process.env.DUNGEON_BLITZ_DAMAGE_METER = '0';
 
 /** Writes launcher-state.json as an older launcher, or an earlier play, would have left it. */
 function seedState(extra = {}) {
