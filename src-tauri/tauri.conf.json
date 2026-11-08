@@ -13,8 +13,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFCN0RCQTI0NTA2QzQ5MEYKUldRUFNXeFFKTHA5RzczYlN0QWNvV2ZkdG9kMXk2Z1NPUlYwNjY3OEQ4cFAwYmtLN1A0bWI3T3gK",
+      "endpoints": ["https://downloads.theminesa.studio/launcher/updater.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis", "app", "dmg", "appimage", "deb"],
     "publisher": "The Minesa Studios",
     "category": "Game",

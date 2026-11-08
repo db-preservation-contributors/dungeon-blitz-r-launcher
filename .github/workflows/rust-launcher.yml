@@ -1,5 +1,12 @@
 name: Rust launcher
 
+# Self-update signing (one-time setup, repo Settings > Secrets and variables > Actions):
+#   TAURI_SIGNING_PRIVATE_KEY           the updater private key (the `tauri signer generate` file's
+#                                       contents; its public key is in src-tauri/tauri.conf.json).
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key's password, or empty if it has none.
+# Without these the build still runs, just without the signatures the launcher's in-place updater
+# needs, and publish-downloads.yml then leaves that release download-only.
+
 on:
   push:
     branches: [main]
@@ -115,8 +122,19 @@ jobs:
           RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
           NO_STRIP: true
           APPIMAGE_EXTRACT_AND_RUN: 1
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           mkdir -p vendor
+          # createUpdaterArtifacts (tauri.conf.json) makes the bundler sign at build time, which
+          # needs the key. Before the secret is set -- or on a build that cannot sign -- turn it
+          # off so the build still succeeds; the signatures the updater actually uses are made
+          # after bundling, in "Sign the updater artifacts", over the final published files.
+          updater_cfg=""
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            updater_cfg='--config {"bundle":{"createUpdaterArtifacts":false}}'
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; building without updater signatures."
+          fi
           if [ "${{ matrix.win7 }}" = "true" ]; then
             # Tier-3 targets are not in `rustup target list`, which the Tauri CLI checks, so the
             # binary is built with cargo and bundled as the matching regular Windows target.
@@ -163,6 +181,31 @@ jobs:
               cp "$deb" "$out/$prefix-linux-amd64.deb" ;;
           esac
           ls -la $out
+
+      - name: Sign the updater artifacts
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # The launcher updates itself only from the NSIS setups and the AppImage (update.rs
+          # self_updatable()); the .dmg and .deb stay download-only, so they are not signed. Sign
+          # the final renamed files, after appimage-vendor.sh has patched the AppImage, so the
+          # signature matches the exact bytes publish-downloads.yml puts in updater.json.
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; no updater signatures were written."
+            exit 0
+          fi
+          shopt -s nullglob
+          signed=0
+          for f in dist-rs/*-setup.exe dist-rs/*.AppImage; do
+            npx --yes @tauri-apps/cli@2 signer sign --private-key "$TAURI_SIGNING_PRIVATE_KEY" --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$f"
+            test -f "$f.sig"
+            signed=$((signed + 1))
+          done
+          echo "Signed $signed updater artifact(s)."
+          ls -la dist-rs
 
       - uses: actions/upload-artifact@v4
         with:
