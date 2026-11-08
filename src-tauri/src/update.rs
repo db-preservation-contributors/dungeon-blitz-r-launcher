@@ -6,8 +6,11 @@ use std::time::Duration;
 use crate::config::{is_packaged, now_ms, ARCH, PLATFORM};
 use crate::Bus;
 
-const OWNER: &str = "theminesastudios";
-const REPO: &str = "dungeon-blitz-r-launcher";
+// The source repository is private, so releases are mirrored to a public Cloudflare R2 bucket
+// by .github/workflows/publish-downloads.yml. latest.json has the shape of GitHub's
+// releases/latest answer (tag_name, assets[].name, assets[].browser_download_url).
+const DOWNLOADS_HOST: &str = "downloads.theminesa.studio";
+const LATEST_URL: &str = "https://downloads.theminesa.studio/launcher/latest.json";
 const START_DELAY: Duration = Duration::from_secs(5);
 const INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
@@ -94,7 +97,7 @@ pub fn pick_asset(assets: &[Value], build: &str, arch: &str) -> Option<(String, 
 }
 
 fn allowed(url: &str) -> bool {
-    url::Url::parse(url).map(|u| u.scheme() == "https" && u.host_str() == Some("github.com")).unwrap_or(false)
+    url::Url::parse(url).map(|u| u.scheme() == "https" && u.host_str() == Some(DOWNLOADS_HOST)).unwrap_or(false)
 }
 
 #[derive(Clone)]
@@ -152,17 +155,16 @@ impl Updates {
             s.current_version.clone()
         };
         (self.bus)();
-        let endpoint = format!("https://api.github.com/repos/{OWNER}/{REPO}/releases/latest");
         let response = crate::net::client()
-            .get(&endpoint)
-            .header("Accept", "application/vnd.github+json")
+            .get(LATEST_URL)
+            .header("Accept", "application/json")
             .timeout(Duration::from_secs(15))
             .send()
             .await;
         let body = match response {
             Ok(r) if r.status().is_success() => r.json::<Value>().await.ok(),
             Ok(r) => {
-                println!("[Update] check failed: GitHub answered {}", r.status());
+                println!("[Update] check failed: the download server answered {}", r.status());
                 None
             }
             Err(e) => {
@@ -217,11 +219,11 @@ mod tests {
     #[test]
     fn assets() {
         let assets = serde_json::json!([
-            { "name": "DungeonBlitzR-Launcher-2.0.0-win7-x64-setup.exe", "browser_download_url": "https://github.com/a/7" },
-            { "name": "DungeonBlitzR-Launcher-2.0.0-win-x64-setup.exe", "browser_download_url": "https://github.com/a/10" }
+            { "name": "DungeonBlitzR-Launcher-2.0.0-win7-x64-setup.exe", "browser_download_url": "https://downloads.theminesa.studio/a/7" },
+            { "name": "DungeonBlitzR-Launcher-2.0.0-win-x64-setup.exe", "browser_download_url": "https://downloads.theminesa.studio/a/10" }
         ]);
         let list = assets.as_array().unwrap();
-        assert_eq!(pick_asset(list, "win-setup", "x64").unwrap().1, "https://github.com/a/10");
-        assert_eq!(pick_asset(list, "win7-setup", "x64").unwrap().1, "https://github.com/a/7");
+        assert_eq!(pick_asset(list, "win-setup", "x64").unwrap().1, "https://downloads.theminesa.studio/a/10");
+        assert_eq!(pick_asset(list, "win7-setup", "x64").unwrap().1, "https://downloads.theminesa.studio/a/7");
     }
 }

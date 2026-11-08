@@ -1,0 +1,93 @@
+name: Publish downloads
+
+# The repository is private, so the website and the launcher's update check cannot read its
+# releases. When a release is published, its installers are copied to a public Cloudflare R2
+# bucket and a latest.json is written next to them:
+#
+#   https://downloads.theminesa.studio/launcher/<version>/<installer>
+#   https://downloads.theminesa.studio/launcher/latest.json
+#
+# latest.json copies the shape of GitHub's releases/latest answer, so both readers only need
+# the other URL (src-tauri/src/update.rs, and dungeon-blitz-r.js on the website).
+#
+# One-time setup (Cloudflare dashboard, then repo Settings > Secrets and variables > Actions):
+#   1. R2 > create a bucket. Settings > Custom Domains > add downloads.theminesa.studio.
+#   2. Bucket CORS policy: allow GET from https://theminesa.studio (the page reads latest.json).
+#   3. R2 > Manage API tokens > create a token with Object Read & Write on that bucket.
+#   4. Secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.
+#      Variable: R2_BUCKET (the bucket's name).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published release tag to (re)publish, e.g. v1.12.0"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-downloads
+  cancel-in-progress: false
+
+env:
+  PUBLIC_URL: https://downloads.theminesa.studio
+  SITE_PAGE: https://theminesa.studio/dungeon-blitz-r.html
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease > meta.json
+          if [ "$(jq '.isDraft or .isPrerelease' meta.json)" = "true" ]; then
+            echo "$TAG is a draft or prerelease; nothing to publish."; echo "SKIP=1" >> "$GITHUB_ENV"; exit 0
+          fi
+          mkdir dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dl --pattern 'DungeonBlitzR-Launcher-*'
+          # The old Electron releases share this repository; only the Rust launcher's installers
+          # are mirrored.
+          if ! ls dl/*-win-x64-setup.exe >/dev/null 2>&1; then
+            echo "$TAG has no Rust launcher installers; skipping."; echo "SKIP=1" >> "$GITHUB_ENV"; exit 0
+          fi
+          ls -la dl
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Upload to R2
+        if: env.SKIP != '1'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # Installers first, latest.json last: the pointer never names a file that is not there.
+          aws s3 cp dl "s3://$BUCKET/launcher/$version/" --recursive --endpoint-url "$ENDPOINT" \
+            --cache-control "public, max-age=31536000, immutable"
+          jq -n --arg tag "$TAG" --arg base "$PUBLIC_URL/launcher/$version" --arg page "$SITE_PAGE" \
+            --argjson files "$(cd dl && ls -1 | jq -R '{name: ., size: 0}' | jq -s .)" \
+            '{tag_name: $tag, draft: false, prerelease: false, html_url: $page,
+              assets: ($files | map({name, browser_download_url: ($base + "/" + .name)}))}' > latest.json
+          cat latest.json
+          aws s3 cp latest.json "s3://$BUCKET/launcher/latest.json" --endpoint-url "$ENDPOINT" \
+            --content-type application/json --cache-control "public, max-age=300"
+
+      - name: Check the public URL
+        if: env.SKIP != '1'
+        run: |
+          set -euo pipefail
+          sleep 5
+          got=$(curl -fsS "$PUBLIC_URL/launcher/latest.json" | jq -r .tag_name)
+          test "$got" = "$TAG" || { echo "::error::latest.json says $got, expected $TAG"; exit 1; }
+          curl -fsSI "$(curl -fsS "$PUBLIC_URL/launcher/latest.json" | jq -r '.assets[0].browser_download_url')" | head -1
