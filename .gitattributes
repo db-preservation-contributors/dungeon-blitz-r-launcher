@@ -12,3 +12,10 @@ payload/** filter=lfs diff=lfs merge=lfs -text lockable
 # rust-launcher.yml seeds both into Tauri's tool cache before bundling. AppRun (~31 KB) is small
 # enough to keep in Git directly.
 tools/appimage-tools/*.AppImage filter=lfs diff=lfs merge=lfs -text
+
+# NSIS build tools, vendored for the same reason on Windows (Tauri downloads nsis-3.13.zip and
+# nsis_tauri_utils.dll from GitHub release assets while bundling the setup). Both are small
+# (2.3 MB, 34 KB), so they stay in Git directly -- no LFS round trip to fail -- marked binary so
+# Git never rewrites their line endings and breaks the SHA1 tauri-bundler checks.
+tools/nsis-tools/* binary
+tools/nsis-tools/*.md text

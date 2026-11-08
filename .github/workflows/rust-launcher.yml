@@ -10,9 +10,9 @@ name: Rust launcher
 on:
   push:
     branches: [main]
-    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', '.github/workflows/rust-launcher.yml']
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', 'tools/appimage-tools/**', 'tools/nsis-tools/**', '.github/workflows/rust-launcher.yml']
   pull_request:
-    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', '.github/workflows/rust-launcher.yml']
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', 'tools/appimage-tools/**', 'tools/nsis-tools/**', '.github/workflows/rust-launcher.yml']
   workflow_dispatch:
     inputs:
       release:
@@ -146,6 +146,54 @@ jobs:
           seed linuxdeploy-07333c6-x86_64.AppImage tools/appimage-tools/linuxdeploy-07333c6-x86_64.AppImage \
             "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy-07333c6/linuxdeploy-x86_64.AppImage"
           ls -la "$cache"
+
+      - name: Seed the NSIS build tools
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The Windows twin of the AppImage step: when %LOCALAPPDATA%\tauri\NSIS is absent,
+          # tauri-bundler downloads nsis-3.13.zip and nsis_tauri_utils.dll from GitHub release assets,
+          # and those 503/504 whenever GitHub is degraded (every Windows job of the v1.12.1 rerun).
+          # The pinned files are vendored in tools/nsis-tools and laid out exactly as the bundler
+          # would (crates/tauri-bundler/src/bundle/windows/nsis/mod.rs): with every required file
+          # present and NSIS.exe at the expected SHA1, it skips the downloads. A newer Tauri CLI that
+          # pins other versions just sees an outdated NSIS.exe and downloads, as before this step.
+          $tools = Join-Path $env:LOCALAPPDATA 'tauri'
+          $nsis = Join-Path $tools 'NSIS'
+          New-Item -ItemType Directory -Force $tools | Out-Null
+          function Get-Tool([string]$vendored, [string]$url, [string]$sha1) {
+            if ((Test-Path $vendored) -and (Get-FileHash $vendored -Algorithm SHA1).Hash -eq $sha1) {
+              return (Resolve-Path $vendored).Path
+            }
+            Write-Host "::warning::$vendored is missing or not SHA1 $sha1; downloading it with retries."
+            $out = Join-Path $env:RUNNER_TEMP (Split-Path $url -Leaf)
+            for ($i = 1; ; $i++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $out -TimeoutSec 300
+                if ((Get-FileHash $out -Algorithm SHA1).Hash -ne $sha1) { throw "SHA1 mismatch for $url" }
+                return $out
+              } catch {
+                if ($i -ge 8) { throw }
+                Write-Host "Attempt $i failed: $_"
+                Start-Sleep -Seconds (5 * $i)
+              }
+            }
+          }
+          $zip = Get-Tool 'tools/nsis-tools/nsis-3.13.zip' `
+            'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip' `
+            'DB14F8AF2EA346B786C6AE19343F61AAF5E09B8E'
+          $dll = Get-Tool 'tools/nsis-tools/nsis_tauri_utils.dll' `
+            'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll' `
+            '75197FEE3C6A814FE035788D1C34EAD39349B860'
+          if (Test-Path $nsis) { Remove-Item -Recurse -Force $nsis }
+          Expand-Archive -Path $zip -DestinationPath $tools
+          Rename-Item (Join-Path $tools 'nsis-3.13') 'NSIS'
+          $plugins = Join-Path $nsis 'Plugins\x86-unicode\additional'
+          New-Item -ItemType Directory -Force $plugins | Out-Null
+          Copy-Item $dll (Join-Path $plugins 'nsis_tauri_utils.dll')
+          Get-FileHash (Join-Path $nsis 'NSIS.exe'), (Join-Path $plugins 'nsis_tauri_utils.dll') -Algorithm SHA1 |
+            Format-Table Hash, Path -AutoSize
 
       - name: Build installers
         shell: bash
