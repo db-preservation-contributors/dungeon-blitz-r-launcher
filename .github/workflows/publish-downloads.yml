@@ -6,9 +6,12 @@ name: Publish downloads
 #
 #   https://downloads.theminesa.studio/launcher/<version>/<installer>
 #   https://downloads.theminesa.studio/launcher/latest.json
+#   https://downloads.theminesa.studio/launcher/updater.json
 #
 # latest.json copies the shape of GitHub's releases/latest answer, so both readers only need
-# the other URL (src-tauri/src/update.rs, and dungeon-blitz-r.js on the website).
+# the other URL (src-tauri/src/update.rs, and dungeon-blitz-r.js on the website). updater.json is
+# the tauri-plugin-updater manifest: one signed installer per platform key, which lets the
+# launcher download and apply its own update in place (Windows NSIS and Linux AppImage).
 #
 # One-time setup (Cloudflare dashboard, then repo Settings > Secrets and variables > Actions):
 #   1. R2 > create a bucket. Settings > Custom Domains > add downloads.theminesa.studio.
@@ -81,6 +84,50 @@ jobs:
               assets: ($files | map({name, browser_download_url: ($base + "/" + .name)}))}' > latest.json
           cat latest.json
           aws s3 cp latest.json "s3://$BUCKET/launcher/latest.json" --endpoint-url "$ENDPOINT" \
+            --content-type application/json --cache-control "public, max-age=300"
+
+      - name: Write the updater manifest
+        if: env.SKIP != '1'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          # tauri-plugin-updater reads this file (src-tauri/tauri.conf.json endpoints). Each entry
+          # is a platform key (update.rs updater_target()) -> the signed installer the launcher
+          # downloads and installs over itself. Only the self-updating builds appear; the .dmg and
+          # .deb are download-only. signature is the .sig file's content, made in rust-launcher.yml.
+          version="${TAG#v}"
+          base="$PUBLIC_URL/launcher/$version"
+          prefix="DungeonBlitzR-Launcher-$version"
+          platforms=$(jq -n '{}')
+          add() {
+            local key="$1" file="$2" sig="dl/$2.sig"
+            if [ -f "dl/$file" ] && [ -f "$sig" ]; then
+              platforms=$(jq --arg k "$key" --arg url "$base/$file" --rawfile sig "$sig" \
+                '.[$k] = {signature: $sig, url: $url}' <<<"$platforms")
+              echo "updater: $key -> $file"
+            else
+              echo "updater: $key skipped (no signed $file)"
+            fi
+          }
+          add windows-x86_64 "$prefix-win-x64-setup.exe"
+          add windows-i686   "$prefix-win-ia32-setup.exe"
+          add win7-x86_64    "$prefix-win7-x64-setup.exe"
+          add win7-i686      "$prefix-win7-ia32-setup.exe"
+          add linux-x86_64   "$prefix-linux-x86_64.AppImage"
+          if [ "$(jq 'length' <<<"$platforms")" -eq 0 ]; then
+            echo "::warning::No signed updater artifacts in $TAG; updater.json not written (this release stays download-only)."
+            exit 0
+          fi
+          jq -n --arg v "$version" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --arg notes "Dungeon Blitz: R launcher $version" --argjson platforms "$platforms" \
+            '{version: $v, pub_date: $date, notes: $notes, platforms: $platforms}' > updater.json
+          cat updater.json
+          aws s3 cp updater.json "s3://$BUCKET/launcher/updater.json" --endpoint-url "$ENDPOINT" \
             --content-type application/json --cache-control "public, max-age=300"
 
       - name: Check the upload

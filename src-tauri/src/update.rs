@@ -25,6 +25,10 @@ pub struct UpdateState {
     pub error: String,
     pub current_version: String,
     pub last_checked_at: u64,
+    // True on builds whose installer the launcher can download and apply itself (Windows NSIS,
+    // Linux AppImage). macOS (.dmg), the .deb, and any unpackaged copy stay notice-only: the
+    // renderer shows a download link for those instead of the "update and restart" button.
+    pub can_self_update: bool,
     #[serde(skip)]
     pub download_url: String,
 }
@@ -36,6 +40,31 @@ pub fn build_name() -> &'static str {
         "win32" => "win-setup",
         _ if std::env::var("APPIMAGE").is_ok() => "linux-appimage",
         _ => "linux-deb",
+    }
+}
+
+// Which builds can apply their own update in place. These are the bundle types tauri-plugin-updater
+// installs (Windows NSIS setup, Linux AppImage); the signed artifact and its signature come from
+// the updater.json endpoint. The .dmg, the .deb, and an unpackaged copy are not updated in place.
+fn self_updatable() -> bool {
+    matches!(build_name(), "win-setup" | "win7-setup" | "linux-appimage")
+}
+
+// The platform key this build looks up in updater.json. The updater's own {os}-{arch} key cannot
+// tell the Windows 7 build apart from the regular one (both are windows-x86_64), so each build
+// states its key explicitly and publish-downloads.yml writes a matching entry per installer.
+fn updater_target() -> Option<String> {
+    let arch = match ARCH {
+        "x64" => "x86_64",
+        "ia32" => "i686",
+        "arm64" => "aarch64",
+        _ => return None,
+    };
+    match build_name() {
+        "win-setup" => Some(format!("windows-{arch}")),
+        "win7-setup" => Some(format!("win7-{arch}")),
+        "linux-appimage" => Some(format!("linux-{arch}")),
+        _ => None,
     }
 }
 
@@ -117,6 +146,7 @@ impl Updates {
             error: String::new(),
             current_version: version,
             last_checked_at: 0,
+            can_self_update: is_packaged() && self_updatable(),
             download_url: String::new(),
         };
         Self { bus, state: Arc::new(Mutex::new(state)) }
@@ -200,6 +230,100 @@ impl Updates {
         }
         drop(s);
         (self.bus)();
+    }
+
+    // Download and apply the newest signed build in place, then relaunch. Only self-updatable
+    // builds reach here. The Tauri updater verifies the download against the pubkey in
+    // tauri.conf.json before it installs. On Windows the NSIS installer takes over and the
+    // process exits during install, so the lines after download_and_install run on macOS/Linux.
+    pub async fn install(&self, app: &tauri::AppHandle) -> bool {
+        use tauri_plugin_updater::UpdaterExt;
+        if !is_packaged() || !self_updatable() {
+            return false;
+        }
+        {
+            let mut s = self.state.lock().unwrap();
+            s.state = "checking".into();
+            s.error.clear();
+            s.percent = 0;
+        }
+        (self.bus)();
+
+        let updater = {
+            let mut builder = app.updater_builder();
+            if let Some(target) = updater_target() {
+                builder = builder.target(target);
+            }
+            match builder.build() {
+                Ok(updater) => updater,
+                Err(e) => return self.install_failed(format!("The updater is unavailable: {e}")),
+            }
+        };
+        let update = match updater.check().await {
+            Ok(Some(update)) => update,
+            Ok(None) => return self.install_failed("No signed update is published for this build yet.".into()),
+            Err(e) => return self.install_failed(format!("The update check failed: {e}")),
+        };
+        {
+            let mut s = self.state.lock().unwrap();
+            s.state = "downloading".into();
+            s.version = update.version.clone();
+            s.percent = 0;
+        }
+        (self.bus)();
+
+        let downloaded = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let on_chunk = {
+            let downloaded = downloaded.clone();
+            let state = self.state.clone();
+            let bus = self.bus.clone();
+            move |chunk: usize, total: Option<u64>| {
+                let got = downloaded.fetch_add(chunk as u64, std::sync::atomic::Ordering::SeqCst) + chunk as u64;
+                if let Some(total) = total.filter(|t| *t > 0) {
+                    let pct = (got.saturating_mul(100) / total).min(100) as u32;
+                    let changed = {
+                        let mut s = state.lock().unwrap();
+                        let changed = s.percent != pct;
+                        s.percent = pct;
+                        changed
+                    };
+                    if changed {
+                        (bus)();
+                    }
+                }
+            }
+        };
+        let on_finish = {
+            let state = self.state.clone();
+            let bus = self.bus.clone();
+            move || {
+                {
+                    let mut s = state.lock().unwrap();
+                    s.state = "downloaded".into();
+                    s.percent = 100;
+                }
+                (bus)();
+            }
+        };
+        if let Err(e) = update.download_and_install(on_chunk, on_finish).await {
+            return self.install_failed(format!("The update could not be installed: {e}"));
+        }
+        // The new build is in place; relaunch into it. (Windows has already exited above.)
+        app.restart();
+    }
+
+    fn install_failed(&self, message: String) -> bool {
+        println!("[Update] self-update failed: {message}");
+        {
+            let mut s = self.state.lock().unwrap();
+            // Fall back to the notice path: "available" keeps the version and the download link,
+            // and a non-empty error tells the renderer to also show the manual download button.
+            s.state = "available".into();
+            s.error = message;
+            s.percent = 0;
+        }
+        (self.bus)();
+        false
     }
 }
 

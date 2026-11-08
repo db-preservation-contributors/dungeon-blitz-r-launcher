@@ -961,8 +961,9 @@ fn move_to_applications(app: AppHandle, l: S) -> Value {
 }
 
 #[tauri::command]
-fn update_install() -> bool {
-    false
+async fn update_install(app: AppHandle, l: S<'_>) -> Result<bool, ()> {
+    let l = launcher!(l);
+    Ok(l.updates.install(&app).await)
 }
 
 #[tauri::command]
@@ -1195,6 +1196,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_state,
             discord_login,

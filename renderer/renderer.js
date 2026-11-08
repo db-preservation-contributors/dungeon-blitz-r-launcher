@@ -160,17 +160,25 @@ function engineRows(state) {
         updateValue = `${current} - ${update.version} ready, restart to install`;
         updateTone = 'ok';
     } else if (update.state === 'available') {
-        // A build that cannot install updates itself (macOS, portable, 32-bit setup): the
-        // Download button below opens the new release's file in the browser.
         updateValue = `${current} - launcher ${update.version} is available`;
         updateTone = 'ok';
-        updateDetail = `Download opens ${update.asset || 'the release page'} on GitHub; install it over this copy.`;
+        if (update.canSelfUpdate && !update.error) {
+            // This build applies updates itself: the button downloads and installs the new one.
+            updateDetail = 'Press Update and restart: the launcher downloads this version and installs it over itself.';
+        } else if (update.error) {
+            // A self-update that failed falls back to the manual download link below.
+            updateDetail = `${update.error} Use Download to get ${update.asset || 'the release'} and install it by hand.`;
+        } else {
+            // A build that cannot install updates itself (macOS, the .deb, a portable copy): the
+            // Download button below opens the new release's file in the browser.
+            updateDetail = `Download opens ${update.asset || 'the release page'}; install it over this copy.`;
+        }
     } else if (update.state === 'checking') {
         updateValue = `${current} - checking...`;
     }
-    if (update.mode === 'notice' && update.state !== 'available') {
+    if (!update.canSelfUpdate && update.state !== 'available') {
         updateDetail =
-            'The launcher checks GitHub for a newer version after start and every six hours. This build cannot install it itself, so a download link appears here.';
+            'The launcher checks for a newer version after start and every six hours. This build cannot install it itself, so a download link appears here.';
     }
 
     // The Discord widget is filled by the game server, which holds the bot token; the
@@ -513,13 +521,18 @@ function render(state) {
 
     elements.moveApp.hidden = !(state.install && state.install.relocate && state.install.canMove);
 
-    // The restart-to-update button appears only when a full update is sitting downloaded;
-    // every other state leaves the strip to say what is happening instead.
-    elements.updateInstall.hidden = !state.update || state.update.state !== 'downloaded';
-    // Builds that cannot install an update get a download link for it instead.
-    elements.updateDownload.hidden = !state.update || state.update.state !== 'available';
+    // "Update and restart" shows when a self-updating build sees a new version, and once it has
+    // finished downloading it becomes "Restart to update". Builds that cannot install an update
+    // themselves (and a self-update that failed) get the manual download link instead.
+    const u = state.update || {};
+    const canSelf = !!(u.canSelfUpdate && !u.error);
+    elements.updateInstall.hidden = !(u.state === 'downloaded' || (u.state === 'available' && canSelf));
+    if (!elements.updateInstall.hidden) {
+        elements.updateInstall.textContent = u.state === 'downloaded' ? 'Restart to update' : 'Update and restart';
+    }
+    elements.updateDownload.hidden = !(u.state === 'available' && !canSelf);
     if (!elements.updateDownload.hidden) {
-        elements.updateDownload.textContent = `Download ${state.update.version}`;
+        elements.updateDownload.textContent = `Download ${u.version || ''}`.trim();
     }
     elements.updateActions.hidden = elements.updateInstall.hidden && elements.updateDownload.hidden;
     // Syncing only means something once a session has given the launcher a server to ask, so
