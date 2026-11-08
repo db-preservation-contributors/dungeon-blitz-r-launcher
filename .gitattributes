@@ -6,3 +6,9 @@
 # Binary, large, and rebuilt rarely -- Git LFS, and lockable so two people cannot edit
 # the same binary in parallel.
 payload/** filter=lfs diff=lfs merge=lfs -text lockable
+
+# AppImage build tools, vendored so the Linux release does not depend on Tauri's flaky GitHub
+# download of AppRun/linuxdeploy at bundle time. The large linuxdeploy binary goes to Git LFS;
+# rust-launcher.yml seeds both into Tauri's tool cache before bundling. AppRun (~31 KB) is small
+# enough to keep in Git directly.
+tools/appimage-tools/*.AppImage filter=lfs diff=lfs merge=lfs -text

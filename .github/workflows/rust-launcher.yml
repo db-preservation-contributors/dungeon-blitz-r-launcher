@@ -116,6 +116,37 @@ jobs:
           case "${{ matrix.target }}" in i686-*) arch=ia32 ;; esac
           node tools/preflight.js --platform ${{ matrix.platform }} --arch $arch --engine ${{ matrix.air && 'air' || 'flash' }}
 
+      - name: Seed the AppImage build tools
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tauri downloads AppRun and linuxdeploy from GitHub release assets while bundling the
+          # AppImage; those downloads 504 whenever GitHub is degraded and fail the Linux build. The
+          # tools are vendored in tools/appimage-tools and copied into Tauri's tool cache under the
+          # exact names tauri-bundler looks for (~/.cache/tauri/AppRun-x86_64 and
+          # linuxdeploy-07333c6-x86_64.AppImage), so the bundler finds them and never downloads.
+          cache="$HOME/.cache/tauri"
+          mkdir -p "$cache"
+          # linuxdeploy lives in Git LFS and checkout runs with LFS off, so materialize it here.
+          git lfs pull --include="tools/appimage-tools/*.AppImage" || true
+          seed() { # <cache file name> <vendored path> <fallback download url>
+            local dst="$cache/$1"
+            if [ -f "$2" ] && [ "$(stat -c%s "$2")" -gt 1000 ]; then
+              cp "$2" "$dst"
+            else
+              echo "::warning::$2 is missing or an unresolved LFS pointer; downloading $1 with retries."
+              curl -fSL --retry 8 --retry-all-errors --retry-delay 5 --max-time 300 -o "$dst" "$3"
+            fi
+            chmod +x "$dst"
+            test "$(stat -c%s "$dst")" -gt 1000
+          }
+          seed AppRun-x86_64 tools/appimage-tools/AppRun-x86_64 \
+            "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64"
+          seed linuxdeploy-07333c6-x86_64.AppImage tools/appimage-tools/linuxdeploy-07333c6-x86_64.AppImage \
+            "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy-07333c6/linuxdeploy-x86_64.AppImage"
+          ls -la "$cache"
+
       - name: Build installers
         shell: bash
         env:
