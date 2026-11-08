@@ -76,18 +76,30 @@ jobs:
           aws s3 cp dl "s3://$BUCKET/launcher/$version/" --recursive --endpoint-url "$ENDPOINT" \
             --cache-control "public, max-age=31536000, immutable"
           jq -n --arg tag "$TAG" --arg base "$PUBLIC_URL/launcher/$version" --arg page "$SITE_PAGE" \
-            --argjson files "$(cd dl && ls -1 | jq -R '{name: ., size: 0}' | jq -s .)" \
+            --argjson files "$(cd dl && ls -1 | jq -R '{name: .}' | jq -s .)" \
             '{tag_name: $tag, draft: false, prerelease: false, html_url: $page,
               assets: ($files | map({name, browser_download_url: ($base + "/" + .name)}))}' > latest.json
           cat latest.json
           aws s3 cp latest.json "s3://$BUCKET/launcher/latest.json" --endpoint-url "$ENDPOINT" \
             --content-type application/json --cache-control "public, max-age=300"
 
-      - name: Check the public URL
+      - name: Check the upload
         if: env.SKIP != '1'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ vars.R2_BUCKET }}
         run: |
           set -euo pipefail
-          sleep 5
-          got=$(curl -fsS "$PUBLIC_URL/launcher/latest.json" | jq -r .tag_name)
-          test "$got" = "$TAG" || { echo "::error::latest.json says $got, expected $TAG"; exit 1; }
-          curl -fsSI "$(curl -fsS "$PUBLIC_URL/launcher/latest.json" | jq -r '.assets[0].browser_download_url')" | head -1
+          # Ask the bucket, not the public URL: Cloudflare answers 403 to some GitHub runner IPs
+          # (bot protection), which says nothing about whether players can download.
+          aws s3api head-object --bucket "$BUCKET" --key launcher/latest.json --endpoint-url "$ENDPOINT" >/dev/null
+          for name in $(jq -r '.assets[].name' latest.json); do
+            aws s3api head-object --bucket "$BUCKET" --key "launcher/${TAG#v}/$name" --endpoint-url "$ENDPOINT" >/dev/null
+          done
+          echo "latest.json and $(jq '.assets | length' latest.json) installers are in the bucket."
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/launcher/latest.json" || true)
+          echo "Public URL answered $code from this runner."
+          if [ "$code" != "200" ]; then echo "::warning::$PUBLIC_URL answered $code from the runner; check it from a browser."; fi
