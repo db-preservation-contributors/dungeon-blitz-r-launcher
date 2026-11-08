@@ -291,6 +291,9 @@ jobs:
           name: rust-launcher-${{ matrix.name }}
           path: dist-rs/*
           if-no-files-found: error
+          # The draft release copies these within the run; keeping them longer only fills the
+          # repo's artifact storage, and a full store makes every upload fail.
+          retention-days: 3
 
   release:
     # One draft release with every build's installers. Nothing here publishes it: a person
