@@ -12,7 +12,10 @@
  * certificate is made once in build/air/ and reused; the captive bundle does not show it to players.
  *
  * Usage:
- *   AIR_SDK_HOME=/path/to/AIRSDK node tools/build-air.js [--sdk <dir>] [--check <bundle>]
+ *   AIR_SDK_HOME=/path/to/AIRSDK node tools/build-air.js [--sdk <dir>]
+ *   node tools/build-air.js --check <bundle> [--platform win32]   # the platform it was built for
+ *
+ * Linux carries the Windows bundle, which it plays in Wine (tools/build-wine.js).
  */
 
 const fs = require('fs');
@@ -25,12 +28,14 @@ const WORK_DIR = path.join(LAUNCHER_ROOT, 'build', 'air');
 const VENDOR_ROOT = path.join(LAUNCHER_ROOT, 'vendor', 'air');
 
 function parseArgs(argv) {
-    const args = { sdk: process.env.AIR_SDK_HOME || '', check: '' };
+    const args = { sdk: process.env.AIR_SDK_HOME || '', check: '', platform: process.platform };
     for (let index = 0; index < argv.length; index += 1) {
         if (argv[index] === '--sdk' && argv[index + 1]) {
             args.sdk = argv[++index];
         } else if (argv[index] === '--check' && argv[index + 1]) {
             args.check = argv[++index];
+        } else if (argv[index] === '--platform' && argv[index + 1]) {
+            args.platform = argv[++index];
         }
     }
     return args;
@@ -118,7 +123,7 @@ function main() {
     const args = parseArgs(process.argv.slice(2));
     const { verifyAirApp, BUNDLE_NAME } = require('../lib/airEngine');
     if (args.check) {
-        const result = verifyAirApp(args.check);
+        const result = verifyAirApp(args.check, { platform: args.platform });
         if (!result.ok) {
             throw new Error(`${args.check}: ${result.reason}`);
         }

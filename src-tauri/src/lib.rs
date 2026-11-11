@@ -169,13 +169,17 @@ impl Launcher {
     fn locate_engines(&self) {
         let mut air = engine::air::find(&self.paths);
         if let (Some(app), true) = (air.as_mut(), is_packaged()) {
-            let check = engine::air::verify(&app.path);
+            let check = engine::air::verify(app);
             app.tampered = !check.ok;
             app.tamper_reason = check.reason;
         }
         let projector = self.locate_projector(&self.store.read().projector_path);
         match &air {
-            Some(a) => println!("[AIR] {}{}", a.executable.display(), if a.tampered { format!(" REFUSED: {}", a.tamper_reason) } else { String::new() }),
+            Some(a) => println!(
+                "[AIR] {}{}{}",
+                a.executable.display(),
+                a.wine.as_ref().map(|w| format!(" in Wine at {}", w.display())).unwrap_or_default(),
+                if a.tampered { format!(" REFUSED: {}", a.tamper_reason) } else { String::new() }),
             None => println!("[AIR] No AIR engine in this build."),
         }
         match &projector {
@@ -637,10 +641,33 @@ impl Launcher {
         });
     }
 
+    fn air_launch(&self, air: &engine::air::AirApp, swf: &str) -> engine::Launch {
+        let quality = graphics::flash_quality(&self.resolved_graphics().quality);
+        let mut launch = engine::air::prepare_launch(air, swf, quality, &self.paths.data_dir);
+        if air.wine.is_some() {
+            // Wine draws through XWayland like Flash Player when it can, and through its own
+            // Wayland driver when there is no X display at all.
+            let display = engine::projector::x11_display(
+                std::env::var("DISPLAY").ok(),
+                std::path::Path::new("/tmp/.X11-unix"),
+                engine::projector::own_uid(),
+            );
+            match display {
+                Ok(Some(d)) => {
+                    println!("[AIR] DISPLAY is not set; using XWayland's display {d}");
+                    launch.env.push(("DISPLAY".into(), d));
+                }
+                Ok(None) => {}
+                Err(()) => println!("[AIR] No X display; Wine uses its Wayland driver"),
+            }
+        }
+        launch
+    }
+
     async fn launch_air(self: &L, url: &str) -> Result<(), String> {
         let air = self.live.lock().unwrap().air.clone().ok_or("The AIR engine is missing.")?;
         if is_packaged() {
-            let check = engine::air::verify(&air.path);
+            let check = engine::air::verify(&air);
             if !check.ok {
                 if let Some(a) = self.live.lock().unwrap().air.as_mut() {
                     a.tampered = true;
@@ -650,7 +677,7 @@ impl Launcher {
             }
         }
         let swf = engine::projector::resolve_swf_url(url).await;
-        let launch = engine::air::prepare_launch(&air, &swf, graphics::flash_quality(&self.resolved_graphics().quality));
+        let launch = self.air_launch(&air, &swf);
         println!("[AIR] Starting {} {:?}", launch.command.display(), launch.args);
         self.spawn_game("air", "AIR", launch).await.map(|_| ())
     }
@@ -825,7 +852,7 @@ impl Launcher {
         }
         let Some(air) = self.live.lock().unwrap().air.clone() else { return problem("The AIR engine is missing.") };
         if is_packaged() {
-            let check = engine::air::verify(&air.path);
+            let check = engine::air::verify(&air);
             if !check.ok {
                 return problem(format!("{}. Reinstall the launcher to play.", check.reason));
             }
@@ -835,7 +862,7 @@ impl Launcher {
             Err(message) => return problem(message),
         };
         let swf = engine::projector::resolve_swf_url(&bridge.page_url).await;
-        let launch = engine::air::prepare_launch(&air, &swf, graphics::flash_quality(&self.resolved_graphics().quality));
+        let launch = self.air_launch(&air, &swf);
         println!("[Dev] {label}: starting {} {:?}", launch.command.display(), launch.args);
         // Kept before the game starts, so a game that closes at once still closes its bridge.
         self.live.lock().unwrap().dev_bridge = Some(bridge);

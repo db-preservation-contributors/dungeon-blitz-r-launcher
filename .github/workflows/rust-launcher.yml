@@ -10,9 +10,9 @@ name: Rust launcher
 on:
   push:
     branches: [main]
-    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', 'tools/appimage-tools/**', 'tools/nsis-tools/**', '.github/workflows/rust-launcher.yml']
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', 'tools/appimage-tools/**', 'tools/nsis-tools/**', 'tools/build-wine.js', 'tools/build-air.js', 'air/**', 'wine.lock.json', '.github/workflows/rust-launcher.yml']
   pull_request:
-    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', 'tools/appimage-tools/**', 'tools/nsis-tools/**', '.github/workflows/rust-launcher.yml']
+    paths: ['src-tauri/**', 'renderer/**', 'servers.json', '*.config.json', 'tools/win7-imports.js', 'tools/appimage-tools/**', 'tools/nsis-tools/**', 'tools/build-wine.js', 'tools/build-air.js', 'air/**', 'wine.lock.json', '.github/workflows/rust-launcher.yml']
   workflow_dispatch:
     inputs:
       release:
@@ -41,17 +41,53 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
+  air-windows:
+    # The Windows AIR bundle, built once: the Windows installer carries it, and so does Linux,
+    # which plays it in Wine (HARMAN's Linux AIR runtime needs a commercial licence, and ADT
+    # builds a bundle only for the system it runs on).
+    name: AIR engine (Windows)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build the AIR engine
+        shell: bash
+        run: |
+          sdk=$(node tools/fetch-air-sdk.js --platform win32 | tail -1)
+          AIR_SDK_HOME="$sdk" node tools/build-air.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: air-win32
+          path: |
+            vendor/air/win32/
+            lib/air.integrity.json
+          if-no-files-found: error
+          retention-days: 3
+
   build:
     name: ${{ matrix.label }}
-    needs: test
+    needs: [test, air-windows]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, label: Windows x64, platform: win32, target: x86_64-pc-windows-msvc, toolchain: stable, air: true, name: win-x64 }
-          - { os: macos-15-intel, label: macOS, platform: darwin, target: x86_64-apple-darwin, toolchain: stable, air: true, name: mac-x64 }
-          - { os: ubuntu-22.04, label: Linux, platform: linux, target: x86_64-unknown-linux-gnu, toolchain: stable, name: linux }
+          # air: build -- this runner builds its own AIR bundle; windows -- it takes the one the
+          # air-windows job built (Linux plays it in the Wine it builds, tools/build-wine.js).
+          - { os: windows-latest, label: Windows x64, platform: win32, target: x86_64-pc-windows-msvc, toolchain: stable, air: windows, name: win-x64 }
+          - { os: macos-15-intel, label: macOS, platform: darwin, target: x86_64-apple-darwin, toolchain: stable, air: build, name: mac-x64 }
+          - { os: ubuntu-22.04, label: Linux, platform: linux, target: x86_64-unknown-linux-gnu, toolchain: stable, air: windows, name: linux }
     steps:
       - uses: actions/checkout@v4
 
@@ -64,6 +100,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev patchelf libgtk2.0-0 libnss3 squashfs-tools
+          # Wine (tools/build-wine.js): its build tools and the libraries its drivers use.
+          sudo apt-get install -y gcc-mingw-w64-x86-64 flex bison libx11-dev libxext-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxcomposite-dev libxinerama-dev libxfixes-dev libxrender-dev libxxf86vm-dev \
+            libfreetype-dev libfontconfig-dev libgnutls28-dev libpulse-dev libasound2-dev libgl-dev libegl-dev \
+            libvulkan-dev libdbus-1-dev libudev-dev libwayland-dev wayland-protocols libxkbcommon-dev libxkbregistry-dev
 
       - name: Set up Rust (stable)
         if: matrix.toolchain == 'stable'
@@ -93,25 +134,51 @@ jobs:
         run: node tools/build-flash-preload.js --platform linux
 
       - name: Set up Java for the AIR SDK
-        if: matrix.air
+        if: matrix.air == 'build'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
       - name: Build the AIR engine
-        if: matrix.air
+        if: matrix.air == 'build'
         shell: bash
         run: |
           sdk=$(node tools/fetch-air-sdk.js --platform ${{ matrix.platform }} | tail -1)
           AIR_SDK_HOME="$sdk" node tools/build-air.js
+
+      - name: Take the Windows AIR engine
+        if: matrix.air == 'windows'
+        uses: actions/download-artifact@v4
+        with:
+          name: air-win32
+          path: .
+
+      - name: Reuse a Wine build
+        if: matrix.platform == 'linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/wine/install
+            build/wine/install.stamp.json
+          key: wine-${{ runner.os }}-${{ hashFiles('wine.lock.json', 'tools/build-wine.js') }}
+
+      - name: Build Wine
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          node tools/build-wine.js
+          node tools/build-air.js --check vendor/air/win32/DungeonBlitzR --platform win32
 
       - name: Check the game engine
         shell: bash
         run: |
           arch=x64
           case "${{ matrix.target }}" in i686-*) arch=ia32 ;; esac
-          node tools/preflight.js --platform ${{ matrix.platform }} --arch $arch --engine ${{ matrix.air && 'air' || 'flash' }}
+          # Linux carries both: Flash Player (checked here) and the Windows AIR bundle in Wine
+          # (checked in "Build Wine").
+          engine=air; [ "${{ matrix.platform }}" = linux ] && engine=flash
+          node tools/preflight.js --platform ${{ matrix.platform }} --arch $arch --engine $engine
 
       - name: Seed the AppImage build tools
         if: matrix.platform == 'linux'
@@ -254,6 +321,8 @@ jobs:
               vendor="$check/usr/lib/$(node -p "require('./src-tauri/tauri.conf.json').productName")/vendor"
               node tools/verify-projector.js "$vendor/projector/linux/flashplayer" --platform linux
               node tools/build-flash-preload.js --check "$vendor/flashpreload/linux"
+              node tools/build-air.js --check "$vendor/air/win32/DungeonBlitzR" --platform win32
+              node tools/build-wine.js --check "$vendor/wine/linux/wine"
               cp "$deb" "$out/$prefix-linux-amd64.deb" ;;
           esac
           ls -la $out

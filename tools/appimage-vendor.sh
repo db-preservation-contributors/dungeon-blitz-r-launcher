@@ -39,11 +39,13 @@ unsquashfs -no-progress -no-xattrs -o "$offset" -d "$work/AppDir" "$in" >/dev/nu
 vendor="$work/AppDir/usr/lib/$product/vendor"
 [ -d "$vendor" ] || { echo "[appimage-vendor] no $product/vendor in $in" >&2; exit 1; }
 
+# One name per line: the AIR bundle has names with spaces in them ("Adobe AIR").
+(cd "$vendor" && find . -type f | sed 's|^\./||') > "$work/vendor-files"
 count=0
-for file in $(cd "$vendor" && find . -type f | sed 's|^\./||'); do
+while IFS= read -r file; do
   cp "$root/vendor/$file" "$vendor/$file"
   count=$((count + 1))
-done
+done < "$work/vendor-files"
 echo "[appimage-vendor] restored $count vendor files"
 
 comp="$(unsquashfs -s -o "$offset" "$in" | sed -n 's/^Compression //p')"
@@ -59,3 +61,5 @@ unsquashfs -no-progress -no-xattrs -o "$(image_offset "$out")" -d "$work/check" 
 checked="$work/check/usr/lib/$product/vendor"
 node "$root/tools/verify-projector.js" "$checked/projector/linux/flashplayer" --platform linux
 node "$root/tools/build-flash-preload.js" --check "$checked/flashpreload/linux"
+node "$root/tools/build-air.js" --check "$checked/air/win32/DungeonBlitzR" --platform win32
+node "$root/tools/build-wine.js" --check "$checked/wine/linux/wine"

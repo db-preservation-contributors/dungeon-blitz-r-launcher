@@ -13,8 +13,11 @@ vendor/
 lib/projector.integrity.json
 lib/flashpreload.integrity.json
 lib/air.integrity.json
+lib/wine.integrity.json
 
 # tools/build-air.js's staging folder and self-signed certificate.
 /build/air/
 /build/air-sdk/
+# tools/build-wine.js's source download and build tree.
+/build/wine/
 /dist-rs/
