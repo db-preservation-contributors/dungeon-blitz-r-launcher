@@ -17,7 +17,7 @@
  * A finished build is kept in build/wine/install with a stamp of what it was built from, and is
  * reused while wine.lock.json and this script are unchanged (CI caches that folder).
  *
- * Needs a C compiler, the x86_64 MinGW cross compiler, flex, bison and Wine's -dev packages
+ * Needs a C compiler, the x86_64 MinGW cross compiler, flex, bison, patchelf and Wine's -dev packages
  * (see .github/workflows/rust-launcher.yml).
  *
  * Usage:
@@ -121,6 +121,12 @@ function prune(root) {
     const unix = files(path.join(root, 'lib', 'wine', 'x86_64-unix')).filter((f) => f.endsWith('.so'));
     const programs = ['wine', 'wine-preloader', 'wineserver'].map((n) => path.join(root, 'bin', n)).filter((f) => fs.existsSync(f));
     run('strip', ['--strip-unneeded', ...unix, ...programs]);
+    // Wine's Unix libraries need ntdll.so and win32u.so, which sit beside them and which Wine
+    // loads itself. linuxdeploy, packing the AppImage, resolves every library's needs and fails
+    // on a name it cannot find; $ORIGIN lets it (and ldd) find them where they are.
+    for (const library of unix) {
+        run('patchelf', ['--set-rpath', '$ORIGIN', library]);
+    }
     const windows = files(path.join(root, 'lib', 'wine', 'x86_64-windows')).filter((f) => !f.endsWith('.a'));
     run('x86_64-w64-mingw32-strip', ['--strip-debug', ...windows]);
 }
@@ -184,4 +190,4 @@ if (require.main === module) {
     }
 }
 
-module.exports = { stampOf };
+module.exports = { prune, stampOf };
