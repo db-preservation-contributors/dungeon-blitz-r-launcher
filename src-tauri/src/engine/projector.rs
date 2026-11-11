@@ -252,6 +252,84 @@ pub fn appimage_env(get: impl Fn(&str) -> Option<String>) -> Vec<(String, Option
     changes
 }
 
+/// What a Wayland session says when Flash Player cannot have an X display.
+pub const NO_X_DISPLAY: &str = "Flash Player needs an X11 display, and this session has none. \
+On Wayland, turn on XWayland (Hyprland: xwayland { enabled = true }, which is the default) \
+and start the launcher again from your desktop session.";
+
+/// The X display Flash Player should use. Flash Player is a GTK 2 program: it only draws on
+/// X11, and without a display it prints "cannot open display" and exits with status 1 at once.
+/// On a Wayland desktop that display is XWayland's. A launcher started from the session gets
+/// it in DISPLAY; one started some other way (a D-Bus activated app menu, a systemd user
+/// service, a file manager outside the session) can be missing it while XWayland is running.
+/// Then the display is the lowest X socket in `socket_dir` (/tmp/.X11-unix) that belongs to
+/// `uid`, which is the one XWayland made for this user.
+///
+/// `Ok(None)`: DISPLAY is set, keep it. `Ok(Some(d))`: start Flash Player with DISPLAY=d.
+/// `Err(())`: there is no X display to give it.
+pub fn x11_display(display: Option<String>, socket_dir: &Path, uid: Option<u32>) -> Result<Option<String>, ()> {
+    if display.map(|d| !d.trim().is_empty()).unwrap_or(false) {
+        return Ok(None);
+    }
+    let mut numbers: Vec<u32> = fs::read_dir(socket_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| owned_by(&e.path(), uid))
+                .filter_map(|e| e.file_name().to_str()?.strip_prefix('X')?.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    numbers.sort_unstable();
+    numbers.first().map(|n| Some(format!(":{n}"))).ok_or(())
+}
+
+/// This process's user id, as the owner of /proc/self (Linux has no other way without libc).
+#[cfg(unix)]
+pub fn own_uid() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata("/proc/self").ok().map(|m| m.uid())
+}
+
+#[cfg(not(unix))]
+pub fn own_uid() -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn owned_by(path: &Path, uid: Option<u32>) -> bool {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let Ok(meta) = fs::symlink_metadata(path) else { return false };
+    meta.file_type().is_socket() && uid.map(|u| meta.uid() == u).unwrap_or(true)
+}
+
+#[cfg(not(unix))]
+fn owned_by(_path: &Path, _uid: Option<u32>) -> bool {
+    false
+}
+
+/// What the launcher says when the game closes right after it started with a failing status.
+/// `output` is the last lines the game wrote to stderr.
+pub fn early_exit_message(label: &str, status: &str, output: &[String]) -> String {
+    let said = |needle: &str| output.iter().find(|l| l.contains(needle));
+    if said("cannot open display").is_some() {
+        return NO_X_DISPLAY.into();
+    }
+    if let Some(line) = said("error while loading shared libraries") {
+        let library = line.split("shared libraries: ").nth(1).and_then(|r| r.split(':').next()).unwrap_or("").trim();
+        let gtk2 = if library.contains("gtk-x11-2.0") || library.contains("gdk-x11-2.0") {
+            " It is part of GTK 2: install your distribution's gtk2 package (Arch: gtk2, Debian and Ubuntu: libgtk2.0-0)."
+        } else {
+            ""
+        };
+        return format!("{label} needs {library}, which is not installed on this system.{gtk2}");
+    }
+    match output.iter().rev().find(|l| !l.trim().is_empty()) {
+        Some(last) => format!("{label} closed as soon as it started ({status}): {}", last.trim()),
+        None => format!("{label} closed as soon as it started ({status})."),
+    }
+}
+
 pub fn linux_env(preload: Option<&Preload>) -> Vec<(String, String)> {
     let mut env = Vec::new();
     if !env_is("DUNGEON_BLITZ_FLASH_VDPAU", "1") {
@@ -318,6 +396,48 @@ mod tests {
             default_swf_url("http://dungeonblitzr.theminesa.studio/"),
             "http://dungeonblitzr.theminesa.studio/p/cbp/DungeonBlitz.swf?fv=cbp&gv=cbp"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finds_xwayland_display_when_display_is_missing() {
+        use std::os::unix::net::UnixListener;
+        let dir = std::env::temp_dir().join(format!("db-x11-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(x11_display(Some(":0".into()), &dir, None), Ok(None));
+        assert_eq!(x11_display(None, &dir, None), Err(()));
+        assert_eq!(x11_display(Some(" ".into()), &dir.join("missing"), None), Err(()));
+
+        fs::write(dir.join("X0"), b"").unwrap(); // not a socket
+        let _two = UnixListener::bind(dir.join("X2")).unwrap();
+        let _one = UnixListener::bind(dir.join("X1")).unwrap();
+        assert_eq!(x11_display(None, &dir, None), Ok(Some(":1".into())));
+        assert_eq!(x11_display(Some(String::new()), &dir, None), Ok(Some(":1".into())));
+        let me = own_uid().expect("/proc/self has an owner");
+        assert_eq!(x11_display(None, &dir, Some(me)), Ok(Some(":1".into())));
+        assert_eq!(x11_display(None, &dir, Some(me.wrapping_add(1))), Err(()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn early_exit_names_the_reason() {
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let display = lines(&["", "(flashplayer:1245): Gtk-WARNING **: 05:56:11.166: cannot open display: "]);
+        assert_eq!(early_exit_message("Flash Player", "exit status: 1", &display), NO_X_DISPLAY);
+
+        let gtk = lines(&["/opt/flashplayer: error while loading shared libraries: libgtk-x11-2.0.so.0: cannot open shared object file: No such file or directory"]);
+        let said = early_exit_message("Flash Player", "exit status: 127", &gtk);
+        assert!(said.starts_with("Flash Player needs libgtk-x11-2.0.so.0, which is not installed"), "{said}");
+        assert!(said.contains("Arch: gtk2"), "{said}");
+
+        let other = lines(&["first", "Error: Invalid SWF file name", ""]);
+        assert_eq!(
+            early_exit_message("Flash Player", "exit status: 255", &other),
+            "Flash Player closed as soon as it started (exit status: 255): Error: Invalid SWF file name"
+        );
+        assert_eq!(early_exit_message("AIR", "exit status: 1", &[]), "AIR closed as soon as it started (exit status: 1).");
     }
 
     #[test]
