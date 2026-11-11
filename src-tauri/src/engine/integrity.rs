@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 pub const PROJECTOR_RECORD: &str = include_str!(concat!(env!("OUT_DIR"), "/projector.integrity.json"));
 pub const AIR_RECORD: &str = include_str!(concat!(env!("OUT_DIR"), "/air.integrity.json"));
 pub const PRELOAD_RECORD: &str = include_str!(concat!(env!("OUT_DIR"), "/flashpreload.integrity.json"));
+pub const WINE_RECORD: &str = include_str!(concat!(env!("OUT_DIR"), "/wine.integrity.json"));
 
 #[derive(Clone, Debug)]
 pub struct Verdict {
@@ -87,15 +88,21 @@ pub fn tree_digest(target: &Path) -> String {
 }
 
 pub fn verify_tree(target: &Path, record: &str, label: &str) -> Verdict {
+    verify_tree_for(target, record, label, crate::config::PLATFORM)
+}
+
+/// `verify_tree` for a record made for `platform`: the Linux build carries the Windows AIR
+/// bundle, which it runs in Wine, so that record says win32.
+pub fn verify_tree_for(target: &Path, record: &str, label: &str, platform: &str) -> Verdict {
     let fail = |reason: String| Verdict { ok: false, reason };
     let parsed: serde_json::Value = serde_json::from_str(record).unwrap_or_default();
     let digest = parsed.get("digest").and_then(|v| v.as_str()).unwrap_or("");
     if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
         return fail(format!("this build carries no {label} fingerprint"));
     }
-    if let Some(platform) = parsed.get("platform").and_then(|v| v.as_str()) {
-        if !platform.is_empty() && platform != crate::config::PLATFORM {
-            return fail(format!("this build's {label} fingerprint is for {platform}"));
+    if let Some(recorded) = parsed.get("platform").and_then(|v| v.as_str()) {
+        if !recorded.is_empty() && recorded != platform {
+            return fail(format!("this build's {label} fingerprint is for {recorded}"));
         }
     }
     let expected = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("");

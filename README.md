@@ -1,9 +1,10 @@
 # Dungeon Blitz: R Launcher
 
 A desktop launcher that plays Dungeon Blitz in the AIR engine -- the game in Adobe AIR's runtime,
-which ships inside the launcher -- so players do not need a browser that still has Flash. The
-builds AIR has no runtime for (Windows 32-bit, the Windows 7 build, Linux) play in Adobe Flash
-Player 32, the standalone player, instead. It ships for Windows, macOS and Linux.
+which ships inside the launcher -- so players do not need a browser that still has Flash. Linux
+plays the Windows AIR build in a Wine the launcher carries. The builds AIR has no runtime for
+(Windows 32-bit, the Windows 7 build) play in Adobe Flash Player 32, the standalone player,
+instead. It ships for Windows, macOS and Linux.
 
 The launcher is a sign-in screen, not a control panel. It asks for one thing — sign in
 with Discord — and once that is done it opens the game and connects to the server. A player who has signed in before is not asked again.
@@ -80,7 +81,8 @@ One build, one engine, and one **Open the game** button. Nothing is picked by th
 | Build | Engine |
 | --- | --- |
 | Windows x64, macOS | AIR: the game in Adobe AIR's runtime (`src-tauri/src/engine/air.rs`, see [AIR engine](#air-engine)). These builds carry **no Flash Player**. |
-| Windows ia32, the Windows 7 build, Linux | Adobe's standalone Flash Player 32 (`flashplayer_32_sa`, `src-tauri/src/engine/projector.rs`), which AIR has no runtime for there |
+| Linux | AIR in Wine: the Windows AIR bundle, run in a Wine built from WineHQ's source and shipped with the launcher (see [AIR on Linux, in Wine](#air-on-linux-in-wine)). Flash Player stays as the **Legacy** button. |
+| Windows ia32, the Windows 7 build | Adobe's standalone Flash Player 32 (`flashplayer_32_sa`, `src-tauri/src/engine/projector.rs`), which AIR has no runtime for there |
 
 An AIR build never looks for a Flash Player: it plays AIR wherever the build carries the bundle,
 even one whose files were changed (it then says so and plays nothing), and Flash Player only in a
@@ -342,7 +344,7 @@ a supported runtime. A build plays in it whenever `vendor/air/<platform>/` has a
 Building it needs the AIR SDK (free for personal use; download it from
 https://airsdk.harman.com/download after accepting its license). ADT builds only for the system it
 runs on. Windows and macOS only: the Linux AIR runtime runs only for commercially licensed
-developers, so `build-air` refuses Linux and Linux packages play Flash Player.
+developers, so `build-air` refuses Linux. Linux plays the Windows bundle in Wine instead.
 
 ```bash
 AIR_SDK_HOME=/path/to/AIRSDK npm run build-air   # -> vendor/air/<platform>/
@@ -358,6 +360,32 @@ then `build-air` packages it.
 ```bash
 AIR_SDK_HOME=$(node tools/fetch-air-sdk.js | tail -1) npm run build-air
 ```
+
+### AIR on Linux, in Wine
+
+HARMAN's Linux AIR runtime is only for commercially licensed developers, so the Linux launcher
+carries the Windows AIR bundle (`vendor/air/win32/`) and a Wine to run it in
+(`vendor/wine/linux/wine/`). **Open the game** starts `wine DungeonBlitzR.exe <swf>`; **Legacy**
+still starts Flash Player.
+
+- The Wine is built from WineHQ's own source by `tools/build-wine.js`: `wine.lock.json` pins the
+  source tarball (SHA-256) and the configure options. It is 64-bit only (`--enable-archs=x86_64`),
+  so players need no 32-bit libraries, and it leaves out what only building programs for Wine
+  needs (headers, import libraries, winegcc, ...). CI caches the build by the lock and the script.
+- The game gets a Wine folder of its own, `wine-prefix/` in the launcher's data folder, made on
+  the first start (some seconds). Wine is kept from offering Mono and Gecko, which AIR does not
+  use, and from adding menu entries (`WINEDLLOVERRIDES`).
+- Wine draws through X11 (XWayland on a Wayland desktop) and, with no X display at all, through
+  its own Wayland driver.
+- Both folders are fingerprinted: `lib/air.integrity.json` (made for win32) and
+  `lib/wine.integrity.json`. CI builds the Windows bundle once (`air-windows` job), for the
+  Windows installer and the Linux packages.
+
+```bash
+node tools/build-wine.js                 # -> vendor/wine/linux/wine, lib/wine.integrity.json
+```
+
+Wine is LGPL-2.1-or-later; its source is the tarball in `wine.lock.json`.
 
 ## Tamper resistance
 
@@ -421,7 +449,7 @@ folder) is the one the Electron launcher wrote, so a player moving from it is no
 | Windows ia32 | `i686-pc-windows-msvc` | Flash Player | 32-bit Windows 10 |
 | Windows 7 x64 / ia32 | `x86_64-win7-windows-msvc` / `i686-win7-windows-msvc` | Flash Player | Windows 7, 8, 8.1 (and later) |
 | macOS | `x86_64-apple-darwin` | AIR | macOS 10.15 and later; Apple Silicon runs it under Rosetta |
-| Linux | `x86_64-unknown-linux-gnu` | Flash Player | x86_64, AppImage or .deb |
+| Linux | `x86_64-unknown-linux-gnu` | AIR in Wine, Flash Player as Legacy | x86_64, AppImage or .deb |
 
 The window is the system's web view: WebView2 on Windows, WKWebView on macOS, WebKitGTK on
 Linux. The Windows 7 build runs on WebView2 109, the last version for Windows 7. If WebView2 is missing

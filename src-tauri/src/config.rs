@@ -66,6 +66,11 @@ impl Paths {
     pub fn vendor(&self, kind: &str) -> PathBuf {
         self.resource_root.join("vendor").join(kind).join(PLATFORM)
     }
+
+    /// The vendor folder of another platform's build of `kind` (the Windows AIR bundle on Linux).
+    pub fn vendor_for(&self, kind: &str, platform: &str) -> PathBuf {
+        self.resource_root.join("vendor").join(kind).join(platform)
+    }
 }
 
 pub fn read_json(path: &Path) -> Option<Value> {

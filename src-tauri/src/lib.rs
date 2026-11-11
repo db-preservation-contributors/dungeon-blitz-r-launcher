@@ -68,6 +68,8 @@ struct Live {
     dev_bridge: Option<dev_join::Bridge>,
     dev_join_state: String,
     dev_join_error: String,
+    /// Why the last game closed as soon as it started, shown until the next game starts.
+    game_exit: String,
 }
 
 pub struct Launcher {
@@ -92,6 +94,9 @@ pub struct Launcher {
 }
 
 type L = Arc<Launcher>;
+
+/// A game that fails sooner than this after starting is said to have closed at once, with why.
+const EARLY_EXIT: Duration = Duration::from_secs(20);
 
 fn engine_for(air: bool, projector: bool) -> &'static str {
     let no_air_runtime = config::PLATFORM == "linux" || config::ARCH == "ia32" || cfg!(feature = "win7");
@@ -164,13 +169,17 @@ impl Launcher {
     fn locate_engines(&self) {
         let mut air = engine::air::find(&self.paths);
         if let (Some(app), true) = (air.as_mut(), is_packaged()) {
-            let check = engine::air::verify(&app.path);
+            let check = engine::air::verify(app);
             app.tampered = !check.ok;
             app.tamper_reason = check.reason;
         }
         let projector = self.locate_projector(&self.store.read().projector_path);
         match &air {
-            Some(a) => println!("[AIR] {}{}", a.executable.display(), if a.tampered { format!(" REFUSED: {}", a.tamper_reason) } else { String::new() }),
+            Some(a) => println!(
+                "[AIR] {}{}{}",
+                a.executable.display(),
+                a.wine.as_ref().map(|w| format!(" in Wine at {}", w.display())).unwrap_or_default(),
+                if a.tampered { format!(" REFUSED: {}", a.tamper_reason) } else { String::new() }),
             None => println!("[AIR] No AIR engine in this build."),
         }
         match &projector {
@@ -256,6 +265,7 @@ impl Launcher {
             "serverReachable": live.server_reachable,
             "gameRunning": live.game_kill.is_some(),
             "gameEngine": live.game_engine,
+            "gameExit": live.game_exit,
             "engine": engine,
             "windows": { "supported": true, "product": "", "architecture": config::ARCH, "architectureSupported": true, "reason": "", "requirements": "" },
             "flash": flash,
@@ -491,7 +501,7 @@ impl Launcher {
 
     async fn spawn_game(self: &L, engine: &str, label: &str, launch: Launch) -> Result<u32, String> {
         let mut command = tokio::process::Command::new(&launch.command);
-        command.args(&launch.args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        command.args(&launch.args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
         if let Some(cwd) = &launch.cwd {
             command.current_dir(cwd);
         }
@@ -506,6 +516,32 @@ impl Launcher {
         }
         let mut child = command.spawn().map_err(|e| format!("{label} could not be started: {e}"))?;
         let pid = child.id().unwrap_or(0);
+        let started = std::time::Instant::now();
+        // The game's stderr goes to the launcher's log, and its last lines say why a game that
+        // closed at once did (Flash Player: "cannot open display", a missing GTK 2 library).
+        let output = Arc::new(Mutex::new(std::collections::VecDeque::<String>::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let output = output.clone();
+            let label = label.to_string();
+            tauri::async_runtime::spawn(async move {
+                use tokio::io::AsyncBufReadExt;
+                let mut reader = tokio::io::BufReader::new(stderr);
+                let mut line = Vec::new();
+                while matches!(reader.read_until(b'\n', &mut line).await, Ok(n) if n > 0) {
+                    let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                    line.clear();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    eprintln!("[{label}] {text}");
+                    let mut kept = output.lock().unwrap();
+                    if kept.len() == 40 {
+                        kept.pop_front();
+                    }
+                    kept.push_back(text);
+                }
+            });
+        }
         let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
         {
             let mut live = self.live.lock().unwrap();
@@ -515,14 +551,27 @@ impl Launcher {
         let me = self.clone();
         let label = label.to_string();
         tauri::async_runtime::spawn(async move {
+            let mut exit_problem = String::new();
             tokio::select! {
-                status = child.wait() => println!("[{label}] exited ({})", status.map(|s| s.to_string()).unwrap_or_default()),
+                status = child.wait() => {
+                    let shown = status.as_ref().map(|s| s.to_string()).unwrap_or_default();
+                    println!("[{label}] exited ({shown})");
+                    let failed = status.map(|s| !s.success()).unwrap_or(false);
+                    if failed && started.elapsed() < EARLY_EXIT {
+                        // Give the stderr reader a moment to take the last lines.
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        let lines: Vec<String> = output.lock().unwrap().iter().cloned().collect();
+                        exit_problem = engine::projector::early_exit_message(&label, &shown, &lines);
+                        println!("[{label}] {exit_problem}");
+                    }
+                }
                 _ = kill_rx => { let _ = child.kill().await; }
             }
             {
                 let mut live = me.live.lock().unwrap();
                 live.game_kill = None;
                 live.game_engine.clear();
+                live.game_exit = exit_problem;
             }
             me.end_game_session().await;
         });
@@ -546,6 +595,12 @@ impl Launcher {
                 return Err(format!("{}. Reinstall the launcher to play.", check.reason));
             }
         }
+        let display = if config::PLATFORM == "linux" {
+            engine::projector::x11_display(std::env::var("DISPLAY").ok(), std::path::Path::new("/tmp/.X11-unix"), engine::projector::own_uid())
+                .map_err(|_| engine::projector::NO_X_DISPLAY.to_string())?
+        } else {
+            None
+        };
         let preload = if config::PLATFORM == "linux" { engine::projector::find_flash_preload(&self.paths) } else { None };
         if let (Some(p), true) = (&preload, is_packaged()) {
             let check = engine::projector::verify_flash_preload(&p.directory);
@@ -557,8 +612,12 @@ impl Launcher {
         let resolved = self.resolved_graphics();
         let render = graphics::projector_render_mode(&resolved, &engine::projector::flash_render_mode());
         let quality = graphics::flash_quality(&resolved.quality);
-        let launch = engine::projector::prepare_launch(&projector, &swf, &self.paths.data_dir.join("game"), preload.as_ref(), &render, quality)
+        let mut launch = engine::projector::prepare_launch(&projector, &swf, &self.paths.data_dir.join("game"), preload.as_ref(), &render, quality)
             .map_err(|e| format!("Flash Player could not be prepared: {e}"))?;
+        if let Some(display) = display {
+            println!("[Flash] DISPLAY is not set; using XWayland's display {display}");
+            launch.env.push(("DISPLAY".into(), display));
+        }
         println!("[Flash] Render mode: {}, quality: {}", if render.is_empty() { "software" } else { &render }, resolved.quality);
         println!("[Flash] Starting {} {:?} for {swf}", launch.command.display(), launch.args);
         let pid = self.spawn_game("projector", "Flash Player", launch).await?;
@@ -582,10 +641,33 @@ impl Launcher {
         });
     }
 
+    fn air_launch(&self, air: &engine::air::AirApp, swf: &str) -> engine::Launch {
+        let quality = graphics::flash_quality(&self.resolved_graphics().quality);
+        let mut launch = engine::air::prepare_launch(air, swf, quality, &self.paths.data_dir);
+        if air.wine.is_some() {
+            // Wine draws through XWayland like Flash Player when it can, and through its own
+            // Wayland driver when there is no X display at all.
+            let display = engine::projector::x11_display(
+                std::env::var("DISPLAY").ok(),
+                std::path::Path::new("/tmp/.X11-unix"),
+                engine::projector::own_uid(),
+            );
+            match display {
+                Ok(Some(d)) => {
+                    println!("[AIR] DISPLAY is not set; using XWayland's display {d}");
+                    launch.env.push(("DISPLAY".into(), d));
+                }
+                Ok(None) => {}
+                Err(()) => println!("[AIR] No X display; Wine uses its Wayland driver"),
+            }
+        }
+        launch
+    }
+
     async fn launch_air(self: &L, url: &str) -> Result<(), String> {
         let air = self.live.lock().unwrap().air.clone().ok_or("The AIR engine is missing.")?;
         if is_packaged() {
-            let check = engine::air::verify(&air.path);
+            let check = engine::air::verify(&air);
             if !check.ok {
                 if let Some(a) = self.live.lock().unwrap().air.as_mut() {
                     a.tampered = true;
@@ -595,7 +677,7 @@ impl Launcher {
             }
         }
         let swf = engine::projector::resolve_swf_url(url).await;
-        let launch = engine::air::prepare_launch(&air, &swf, graphics::flash_quality(&self.resolved_graphics().quality));
+        let launch = self.air_launch(&air, &swf);
         println!("[AIR] Starting {} {:?}", launch.command.display(), launch.args);
         self.spawn_game("air", "AIR", launch).await.map(|_| ())
     }
@@ -605,6 +687,7 @@ impl Launcher {
             return json!({ "ok": true });
         }
         let Some(selected) = self.selected() else { return problem("No servers configured. Check servers.json.") };
+        self.live.lock().unwrap().game_exit.clear();
         let has_projector = self.live.lock().unwrap().projector.is_some();
         let engine = if requested == "projector" && has_projector { "projector" } else { self.preferred_engine() };
         let issue = self.engine_problem(engine);
@@ -759,6 +842,7 @@ impl Launcher {
         if self.live.lock().unwrap().game_kill.is_some() {
             return problem("The game is already running. Close it first.");
         }
+        self.live.lock().unwrap().game_exit.clear();
         if self.preferred_engine() != "air" {
             return problem("Developer servers play in the AIR engine, and this build does not carry it.");
         }
@@ -768,7 +852,7 @@ impl Launcher {
         }
         let Some(air) = self.live.lock().unwrap().air.clone() else { return problem("The AIR engine is missing.") };
         if is_packaged() {
-            let check = engine::air::verify(&air.path);
+            let check = engine::air::verify(&air);
             if !check.ok {
                 return problem(format!("{}. Reinstall the launcher to play.", check.reason));
             }
@@ -778,7 +862,7 @@ impl Launcher {
             Err(message) => return problem(message),
         };
         let swf = engine::projector::resolve_swf_url(&bridge.page_url).await;
-        let launch = engine::air::prepare_launch(&air, &swf, graphics::flash_quality(&self.resolved_graphics().quality));
+        let launch = self.air_launch(&air, &swf);
         println!("[Dev] {label}: starting {} {:?}", launch.command.display(), launch.args);
         // Kept before the game starts, so a game that closes at once still closes its bridge.
         self.live.lock().unwrap().dev_bridge = Some(bridge);

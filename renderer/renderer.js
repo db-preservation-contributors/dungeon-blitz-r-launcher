@@ -507,12 +507,13 @@ function render(state) {
     elements.forget.hidden = !state.discord.remembered;
 
     // Whatever keeps the play button from starting the game comes first: a cancelled sign-in,
-    // the answer to the player's own pick of a Flash Player, an engine that cannot run, an
+    // why the last game closed as soon as it started, the answer to the player's own pick of a Flash Player, an engine that cannot run, an
     // unreachable server. A launcher run from a disk image still plays, so it is said last.
     const problem =
         (state.discord && state.discord.loginCodeEnded
             ? { message: 'Too many wrong codes, so that sign-in was cancelled. Sign in with Discord again.', severity: 'bad' }
             : null) ||
+        (state.gameExit ? { message: state.gameExit, severity: 'bad' } : null) ||
         (state.notice ? { message: state.notice, severity: 'warn' } : null) ||
         engineProblem(state) ||
         (state.serverReachable === false ? { message: `Could not reach ${state.selectedServerUrl}`, severity: 'bad' } : null) ||
