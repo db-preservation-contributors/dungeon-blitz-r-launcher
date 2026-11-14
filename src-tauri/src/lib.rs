@@ -608,7 +608,7 @@ impl Launcher {
                 return Err(format!("{}. Reinstall the launcher to play.", check.reason));
             }
         }
-        let swf = engine::projector::resolve_swf_url(url).await;
+        let swf = engine::projector::resolve_swf_url(url, engine::projector::flash_scheme_order()).await;
         let resolved = self.resolved_graphics();
         let render = graphics::projector_render_mode(&resolved, &engine::projector::flash_render_mode());
         let quality = graphics::flash_quality(&resolved.quality);
@@ -676,7 +676,7 @@ impl Launcher {
                 return Err(format!("{}. Reinstall the launcher to play.", check.reason));
             }
         }
-        let swf = engine::projector::resolve_swf_url(url).await;
+        let swf = engine::projector::resolve_swf_url(url, engine::projector::SchemeOrder::HttpFirst).await;
         let launch = self.air_launch(&air, &swf);
         println!("[AIR] Starting {} {:?}", launch.command.display(), launch.args);
         self.spawn_game("air", "AIR", launch).await.map(|_| ())
@@ -861,7 +861,7 @@ impl Launcher {
             Ok(bridge) => bridge,
             Err(message) => return problem(message),
         };
-        let swf = engine::projector::resolve_swf_url(&bridge.page_url).await;
+        let swf = engine::projector::resolve_swf_url(&bridge.page_url, engine::projector::SchemeOrder::HttpFirst).await;
         let launch = self.air_launch(&air, &swf);
         println!("[Dev] {label}: starting {} {:?}", launch.command.display(), launch.args);
         // Kept before the game starts, so a game that closes at once still closes its bridge.

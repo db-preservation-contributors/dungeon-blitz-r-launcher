@@ -186,11 +186,40 @@ pub fn default_swf_url(page_url: &str) -> String {
     Url::parse(page_url).and_then(|b| b.join(DEFAULT_SWF_PATH)).map(|u| u.to_string()).unwrap_or_default()
 }
 
-pub async fn resolve_swf_url(server_url: &str) -> String {
+/// Which scheme `resolve_swf_url` tries first for an `http://` game SWF.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchemeOrder {
+    /// HTTP, then HTTPS when HTTP does not answer.
+    HttpFirst,
+    /// HTTPS, then HTTP when HTTPS does not answer.
+    HttpsFirst,
+}
+
+/// The order Flash Player (the Legacy button) loads the game in.
+///
+/// Flash Player fetches the SWF itself, after the launcher's check, so a check that passes once
+/// says little about a host that answers only some requests. On 2026-11-14 the live host's plain
+/// HTTP answered the game's files with a mix of "502 Bad Gateway", 200 after 3+ seconds and no
+/// answer at all, while HTTPS answered them; 1.13.2's check saw a 200, handed Flash Player the
+/// http:// address, and Flash Player's own request got the 502 (gray loader screen). So Flash
+/// Player goes over HTTPS whenever HTTPS answers.
+///
+/// Except on the Windows 7 builds: Flash Player loads through the system's WinINet, and an
+/// unpatched Windows 7 has no TLS 1.2 there, so HTTPS could fail inside Flash Player even though
+/// the launcher's own (rustls) check succeeded.
+pub fn flash_scheme_order() -> SchemeOrder {
+    if cfg!(feature = "win7") {
+        SchemeOrder::HttpFirst
+    } else {
+        SchemeOrder::HttpsFirst
+    }
+}
+
+pub async fn resolve_swf_url(server_url: &str, order: SchemeOrder) -> String {
     let html = crate::net::get_text(server_url, Duration::from_secs(8), 512 * 1024).await;
     let found = swf_url_from_page(&html, server_url);
     let swf = if found.is_empty() { default_swf_url(server_url) } else { found };
-    reachable_swf_url(swf).await
+    reachable_swf_url(swf, order).await
 }
 
 /// The same address over HTTPS, for an `http://` one.
@@ -207,21 +236,35 @@ pub fn https_twin(url: &str) -> Option<String> {
     Some(parsed.to_string())
 }
 
-/// The game SWF over HTTP when the server answers there, otherwise over HTTPS when that answers.
+/// The game SWF over the first scheme in `order` that answers.
 ///
 /// The game's own files (DungeonBlitz.swf, Game.swz, ...) come from the game process behind the
 /// web server. On 2026-11-14 the live host answered every one of them over plain HTTP with
 /// "502 Bad Gateway" while HTTPS served them, and Flash Player sat on the loader's gray screen.
 /// The page itself still loads over HTTP, so this checks the SWF, not the page. When neither
 /// answers, the HTTP address is kept so the failure looks the same as before.
-async fn reachable_swf_url(swf: String) -> String {
+async fn reachable_swf_url(swf: String, order: SchemeOrder) -> String {
     let Some(secure) = https_twin(&swf) else { return swf };
-    if answers(&swf).await {
-        return swf;
-    }
-    if answers(&secure).await {
-        println!("[Game] {swf} does not answer over HTTP; loading the game over HTTPS");
-        return secure;
+    match order {
+        SchemeOrder::HttpFirst => {
+            if answers(&swf).await {
+                return swf;
+            }
+            if answers(&secure).await {
+                println!("[Game] {swf} does not answer over HTTP; loading the game over HTTPS");
+                return secure;
+            }
+        }
+        SchemeOrder::HttpsFirst => {
+            if answers(&secure).await {
+                println!("[Game] Loading the game over HTTPS: {secure}");
+                return secure;
+            }
+            if answers(&swf).await {
+                println!("[Game] {secure} does not answer; loading the game over HTTP");
+                return swf;
+            }
+        }
     }
     swf
 }
