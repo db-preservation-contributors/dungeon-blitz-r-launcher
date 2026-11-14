@@ -57,7 +57,11 @@ missing on Windows 7.
 
 On every Windows build the launcher checks for WebView2 before it opens its window
 (`src/webview2.rs`); when the runtime is missing it offers to download and run Microsoft's
-bootstrapper, which installs the current runtime on Windows 10/11 and 109 on 7/8/8.1. `.github/workflows/rust-launcher.yml` builds all of them.
+bootstrapper, which installs the current runtime on Windows 10/11. The Windows 7 build first
+downloads Microsoft's own WebView2 109 installer (`MicrosoftEdge_X86/X64_109.0.1518.140.exe`,
+SHA-256 pinned) and runs it with `--msedgewebview`, because the bootstrapper relies on Edge Update,
+which installs nothing on a Windows 7 missing the SHA-2/TLS 1.2 updates; the bootstrapper is
+its fallback. `.github/workflows/rust-launcher.yml` builds all of them.
 
 ## Releases
 

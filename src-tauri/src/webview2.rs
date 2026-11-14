@@ -3,8 +3,16 @@
 //! key, a different Windows account). Without it Tauri only shows "Could not find the WebView2
 //! Runtime" and quits, so the launcher checks first and offers to install it.
 //!
-//! Microsoft's Evergreen bootstrapper picks the right runtime for the system: the current one on
-//! Windows 10 and 11, version 109 (the last for them) on Windows 7, 8 and 8.1.
+//! Windows 10 and 11 get Microsoft's Evergreen bootstrapper, which installs the current runtime.
+//!
+//! Windows 7, 8 and 8.1 stopped at runtime 109. The bootstrapper is supposed to install 109 there,
+//! but it hands the work to Microsoft Edge Update, which on a Windows 7 without the SHA-2 and
+//! TLS 1.2 updates (KB4474419, KB4490628, KB3140245) exits without installing anything: players
+//! saw "The installer finished, but WebView2 is still not available." So the Windows 7 build
+//! downloads the 109 installer itself (Microsoft's own `MicrosoftEdge_X86/X64_109.0.1518.140.exe`
+//! from Microsoft's download service, checked against the SHA-256 below) and runs it with
+//! `--msedgewebview`, which installs only the WebView2 runtime, for this Windows account, with no
+//! Edge Update and no administrator prompt. The bootstrapper stays as the fallback.
 
 use std::path::Path;
 use std::time::Duration;
@@ -16,53 +24,65 @@ const BOOTSTRAPPER_URL: &str = "https://go.microsoft.com/fwlink/p/?LinkId=212470
 const DOWNLOAD_PAGE: &str = "https://developer.microsoft.com/microsoft-edge/webview2";
 const TITLE: &str = "Dungeon Blitz: R";
 
+/// The last WebView2 runtime for Windows 7, 8 and 8.1.
+const LEGACY_VERSION: &str = "109.0.1518.140";
+
+/// (download-service name, installer file, SHA-256 in base64) for the launcher's architecture.
+/// The runtime matches the launcher: the ia32 launcher gets the x86 runtime, the x64 one x64.
+#[cfg(target_arch = "x86")]
+const LEGACY: (&str, &str, &str) = (
+    "msedgewebview-stable-win7and8-x86",
+    "MicrosoftEdge_X86_109.0.1518.140.exe",
+    "K0jOOzBLe5qPk3ekLYZh7NxTxfLG7nCNqdYhJ8eALBg=",
+);
+#[cfg(not(target_arch = "x86"))]
+const LEGACY: (&str, &str, &str) = (
+    "msedgewebview-stable-win7and8-x64",
+    "MicrosoftEdge_X64_109.0.1518.140.exe",
+    "cNSWhzoKHKFK4KA40lhWshIbG0t7rZgBzmObFEusQfg=",
+);
+
 /// True when the runtime is there (or was just installed) and the launcher can open its window.
 pub fn ensure() -> bool {
     if tauri::webview_version().is_ok() {
         return true;
     }
-    let ask = "Dungeon Blitz: R needs the Microsoft Edge WebView2 Runtime, and it is not installed \
-               for this Windows account.\n\nDownload and install it from Microsoft now?";
+    let legacy = cfg!(feature = "win7");
+    let ask = if legacy {
+        "Dungeon Blitz: R needs the Microsoft Edge WebView2 Runtime, and it is not installed \
+         for this Windows account.\n\nDownload it from Microsoft and install it now? It is about \
+         130 MB. Nothing shows while it downloads; a message appears when it is done."
+    } else {
+        "Dungeon Blitz: R needs the Microsoft Edge WebView2 Runtime, and it is not installed \
+         for this Windows account.\n\nDownload and install it from Microsoft now?"
+    };
     if message(ask, MB_YESNO | MB_ICONINFORMATION) != IDYES {
         manual_install(None);
         return false;
     }
-    match install() {
-        Ok(()) if tauri::webview_version().is_ok() => true,
-        Ok(()) => {
-            manual_install(Some("The installer finished, but WebView2 is still not available."));
-            false
+    let mut problems = Vec::new();
+    if legacy {
+        let result = install_legacy();
+        if tauri::webview_version().is_ok() {
+            return true;
         }
-        Err(error) => {
-            manual_install(Some(&error));
-            false
-        }
+        problems.push(result.err().unwrap_or_else(|| {
+            format!("WebView2 {LEGACY_VERSION} installed, but Windows does not report it yet.")
+        }));
     }
+    match install_bootstrapper() {
+        Ok(()) if tauri::webview_version().is_ok() => return true,
+        Ok(()) => problems.push("The installer finished, but WebView2 is still not available.".into()),
+        Err(error) => problems.push(error),
+    }
+    manual_install(Some(&problems.join("\n")));
+    false
 }
 
-fn install() -> Result<(), String> {
+fn install_bootstrapper() -> Result<(), String> {
     let path = std::env::temp_dir().join("DungeonBlitzR-MicrosoftEdgeWebview2Setup.exe");
-    download(&path)?;
-    // Not silent: Microsoft's own progress window shows while it downloads the runtime.
-    let status = std::process::Command::new(&path).arg("/install").status();
-    let _ = std::fs::remove_file(&path);
-    match status {
-        Ok(_) => Ok(()),
-        Err(error) => Err(format!("The WebView2 installer did not start: {error}")),
-    }
-}
-
-fn download(path: &Path) -> Result<(), String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let bytes = runtime.block_on(async {
-        let response = reqwest::Client::builder()
-            .user_agent(concat!("dungeon-blitz-r-launcher/", env!("CARGO_PKG_VERSION")))
-            .timeout(Duration::from_secs(120))
-            .build()
-            .map_err(|e| e.to_string())?
+    let bytes = runtime()?.block_on(async {
+        let response = http(Duration::from_secs(120))?
             .get(BOOTSTRAPPER_URL)
             .send()
             .await
@@ -75,7 +95,106 @@ fn download(path: &Path) -> Result<(), String> {
     if !bytes.starts_with(b"MZ") {
         return Err("The WebView2 installer Microsoft sent is not a Windows program.".into());
     }
-    std::fs::write(path, &bytes).map_err(|e| format!("Could not save the WebView2 installer: {e}"))
+    std::fs::write(&path, &bytes).map_err(|e| format!("Could not save the WebView2 installer: {e}"))?;
+    // Not silent: Microsoft's own progress window shows while it downloads the runtime.
+    let status = std::process::Command::new(&path).arg("/install").status();
+    let _ = std::fs::remove_file(&path);
+    match status {
+        Ok(_) => Ok(()),
+        Err(error) => Err(format!("The WebView2 installer did not start: {error}")),
+    }
+}
+
+/// Downloads Microsoft's WebView2 109 installer and installs the runtime for this account.
+fn install_legacy() -> Result<(), String> {
+    let (name, file, sha256) = LEGACY;
+    let path = std::env::temp_dir().join(format!("DungeonBlitzR-{file}"));
+    let downloaded = runtime()?.block_on(download_legacy(name, file, sha256, &path));
+    if let Err(error) = downloaded {
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    let status = std::process::Command::new(&path).arg("--msedgewebview").status();
+    let _ = std::fs::remove_file(&path);
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!(
+            "The WebView2 {LEGACY_VERSION} installer stopped with code {}.",
+            status.code().map_or_else(|| "?".to_string(), |c| format!("{c} (0x{:08X})", c as u32))
+        )),
+        Err(error) => Err(format!("The WebView2 {LEGACY_VERSION} installer did not start: {error}")),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct DownloadInfo {
+    url: String,
+    file_id: String,
+}
+
+async fn download_legacy(name: &str, file: &str, sha256: &str, path: &Path) -> Result<(), String> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+
+    let failed = |e: &dyn std::fmt::Display| format!("Could not download WebView2 {LEGACY_VERSION} from Microsoft: {e}");
+    // Microsoft's download service hands out a short-lived link for each file of a version.
+    let api = format!(
+        "https://msedge.api.cdp.microsoft.com/api/v1.1/internal/contents/Browser/namespaces/Default/names/{name}/versions/{LEGACY_VERSION}/files?action=GenerateDownloadInfo&foregroundPriority=true"
+    );
+    let client = http(Duration::from_secs(60))?;
+    let files: Vec<DownloadInfo> = client
+        .post(&api)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| failed(&e))?
+        .json()
+        .await
+        .map_err(|e| failed(&e))?;
+    let url = files
+        .into_iter()
+        .find(|f| f.file_id == file)
+        .map(|f| f.url)
+        .ok_or_else(|| failed(&format!("{file} is not offered any more")))?;
+
+    // ~130 MB: streamed to disk, no overall time limit, only a limit per read.
+    let mut response = reqwest::Client::builder()
+        .user_agent(concat!("dungeon-blitz-r-launcher/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(&url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| failed(&e))?;
+    let mut out = std::fs::File::create(path).map_err(|e| format!("Could not save the WebView2 installer: {e}"))?;
+    let mut hasher = Sha256::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| failed(&e))? {
+        hasher.update(&chunk);
+        out.write_all(&chunk).map_err(|e| format!("Could not save the WebView2 installer: {e}"))?;
+    }
+    drop(out);
+    if base64::engine::general_purpose::STANDARD.encode(hasher.finalize()) != sha256 {
+        return Err(format!("The WebView2 {LEGACY_VERSION} installer did not download correctly (checksum mismatch). Try again."));
+    }
+    Ok(())
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())
+}
+
+fn http(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(concat!("dungeon-blitz-r-launcher/", env!("CARGO_PKG_VERSION")))
+        .timeout(timeout)
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 fn manual_install(reason: Option<&str>) {
@@ -84,9 +203,17 @@ fn manual_install(reason: Option<&str>) {
         text.push_str(reason);
         text.push_str("\n\n");
     }
-    text.push_str(&format!(
-        "Install the Microsoft Edge WebView2 Runtime (\"Evergreen Bootstrapper\") from\n{DOWNLOAD_PAGE}\nthen start Dungeon Blitz: R again."
-    ));
+    if cfg!(feature = "win7") {
+        text.push_str(
+            "Start Dungeon Blitz: R again to retry. If it still fails, run Windows Update until it \
+             finds nothing more (KB4474419 and KB4490628 are the ones WebView2 needs), restart the \
+             computer, and try again, or ask for help in our Discord.",
+        );
+    } else {
+        text.push_str(&format!(
+            "Install the Microsoft Edge WebView2 Runtime (\"Evergreen Bootstrapper\") from\n{DOWNLOAD_PAGE}\nthen start Dungeon Blitz: R again."
+        ));
+    }
     message(&text, MB_OK | MB_ICONERROR);
 }
 
