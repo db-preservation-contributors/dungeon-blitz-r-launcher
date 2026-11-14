@@ -189,7 +189,49 @@ pub fn default_swf_url(page_url: &str) -> String {
 pub async fn resolve_swf_url(server_url: &str) -> String {
     let html = crate::net::get_text(server_url, Duration::from_secs(8), 512 * 1024).await;
     let found = swf_url_from_page(&html, server_url);
-    if found.is_empty() { default_swf_url(server_url) } else { found }
+    let swf = if found.is_empty() { default_swf_url(server_url) } else { found };
+    reachable_swf_url(swf).await
+}
+
+/// The same address over HTTPS, for an `http://` one.
+pub fn https_twin(url: &str) -> Option<String> {
+    let mut parsed = Url::parse(url).ok()?;
+    if parsed.scheme() != "http" {
+        return None;
+    }
+    parsed.set_scheme("https").ok()?;
+    // An explicit :80 would survive the scheme change and point HTTPS at the HTTP port.
+    if parsed.port() == Some(80) {
+        parsed.set_port(None).ok()?;
+    }
+    Some(parsed.to_string())
+}
+
+/// The game SWF over HTTP when the server answers there, otherwise over HTTPS when that answers.
+///
+/// The game's own files (DungeonBlitz.swf, Game.swz, ...) come from the game process behind the
+/// web server. On 2026-11-14 the live host answered every one of them over plain HTTP with
+/// "502 Bad Gateway" while HTTPS served them, and Flash Player sat on the loader's gray screen.
+/// The page itself still loads over HTTP, so this checks the SWF, not the page. When neither
+/// answers, the HTTP address is kept so the failure looks the same as before.
+async fn reachable_swf_url(swf: String) -> String {
+    let Some(secure) = https_twin(&swf) else { return swf };
+    if answers(&swf).await {
+        return swf;
+    }
+    if answers(&secure).await {
+        println!("[Game] {swf} does not answer over HTTP; loading the game over HTTPS");
+        return secure;
+    }
+    swf
+}
+
+/// True when a GET of `url` ends (after redirects) in a 2xx. Only the headers are read.
+async fn answers(url: &str) -> bool {
+    match crate::net::client().get(url).timeout(Duration::from_secs(10)).header("Cache-Control", "no-store").send().await {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
 }
 
 pub fn flash_render_mode() -> String {
@@ -396,6 +438,18 @@ mod tests {
             default_swf_url("http://dungeonblitzr.theminesa.studio/"),
             "http://dungeonblitzr.theminesa.studio/p/cbp/DungeonBlitz.swf?fv=cbp&gv=cbp"
         );
+    }
+
+    #[test]
+    fn https_twin_of_http_only() {
+        assert_eq!(
+            https_twin("http://dungeonblitzr.theminesa.studio/p/cbp/DungeonBlitz.swf?fv=cbp&gv=cbp&clientrev=42").as_deref(),
+            Some("https://dungeonblitzr.theminesa.studio/p/cbp/DungeonBlitz.swf?fv=cbp&gv=cbp&clientrev=42")
+        );
+        assert_eq!(https_twin("http://example.com:80/a.swf").as_deref(), Some("https://example.com/a.swf"));
+        assert_eq!(https_twin("http://127.0.0.1:8090/a.swf").as_deref(), Some("https://127.0.0.1:8090/a.swf"));
+        assert_eq!(https_twin("https://example.com/a.swf"), None);
+        assert_eq!(https_twin("not a url"), None);
     }
 
     #[cfg(unix)]
