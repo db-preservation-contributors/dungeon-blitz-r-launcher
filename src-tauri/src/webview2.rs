@@ -13,6 +13,13 @@
 //! from Microsoft's download service, checked against the SHA-256 below) and runs it with
 //! `--msedgewebview`, which installs only the WebView2 runtime, for this Windows account, with no
 //! Edge Update and no administrator prompt. The bootstrapper stays as the fallback.
+//!
+//! Microsoft's download service (`msedge.api.cdp.microsoft.com`) has a certificate from the
+//! Windows Update PKI, which chains to "Microsoft Root Certificate Authority 2011". That root is
+//! only in Windows' own store, not in the Mozilla list (webpki-roots) the launcher's TLS uses, so
+//! without it every request failed with "invalid peer certificate: UnknownIssuer". The root ships
+//! in `certs/` and is trusted for that one request; the installer itself comes over plain HTTP
+//! from Microsoft's CDN and is checked against its SHA-256.
 
 use std::path::Path;
 use std::time::Duration;
@@ -26,6 +33,11 @@ const TITLE: &str = "Dungeon Blitz: R";
 
 /// The last WebView2 runtime for Windows 7, 8 and 8.1.
 const LEGACY_VERSION: &str = "109.0.1518.140";
+
+/// "Microsoft Root Certificate Authority 2011" (DER, valid until 2036-03-22, SHA-256
+/// 847DF6A78497943F27FC72EB93F9A637320A02B561D0A91B09E87A7807ED7C61), the root of the
+/// download service's certificate. See the module notes.
+const MICROSOFT_ROOT_2011: &[u8] = include_bytes!("../certs/MicrosoftRootCertificateAuthority2011.cer");
 
 /// (download-service name, installer file, SHA-256 in base64) for the launcher's architecture.
 /// The runtime matches the launcher: the ia32 launcher gets the x86 runtime, the x64 one x64.
@@ -86,11 +98,11 @@ fn install_bootstrapper() -> Result<(), String> {
             .get(BOOTSTRAPPER_URL)
             .send()
             .await
-            .map_err(|e| format!("Could not download the WebView2 installer: {e}"))?;
+            .map_err(|e| format!("Could not download the WebView2 installer: {}", chain(&e)))?;
         if !response.status().is_success() {
             return Err(format!("Could not download the WebView2 installer (HTTP {}).", response.status().as_u16()));
         }
-        response.bytes().await.map_err(|e| format!("Could not download the WebView2 installer: {e}"))
+        response.bytes().await.map_err(|e| format!("Could not download the WebView2 installer: {}", chain(&e)))
     })?;
     if !bytes.starts_with(b"MZ") {
         return Err("The WebView2 installer Microsoft sent is not a Windows program.".into());
@@ -143,17 +155,23 @@ async fn download_legacy(name: &str, file: &str, sha256: &str, path: &Path) -> R
     let api = format!(
         "https://msedge.api.cdp.microsoft.com/api/v1.1/internal/contents/Browser/namespaces/Default/names/{name}/versions/{LEGACY_VERSION}/files?action=GenerateDownloadInfo&foregroundPriority=true"
     );
-    let client = http(Duration::from_secs(60))?;
+    let root = reqwest::Certificate::from_der(MICROSOFT_ROOT_2011).map_err(|e| failed(&chain(&e)))?;
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("dungeon-blitz-r-launcher/", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(60))
+        .add_root_certificate(root)
+        .build()
+        .map_err(|e| failed(&chain(&e)))?;
     let files: Vec<DownloadInfo> = client
         .post(&api)
         .json(&serde_json::json!({}))
         .send()
         .await
         .and_then(|r| r.error_for_status())
-        .map_err(|e| failed(&e))?
+        .map_err(|e| failed(&chain(&e)))?
         .json()
         .await
-        .map_err(|e| failed(&e))?;
+        .map_err(|e| failed(&chain(&e)))?;
     let url = files
         .into_iter()
         .find(|f| f.file_id == file)
@@ -171,10 +189,10 @@ async fn download_legacy(name: &str, file: &str, sha256: &str, path: &Path) -> R
         .send()
         .await
         .and_then(|r| r.error_for_status())
-        .map_err(|e| failed(&e))?;
+        .map_err(|e| failed(&chain(&e)))?;
     let mut out = std::fs::File::create(path).map_err(|e| format!("Could not save the WebView2 installer: {e}"))?;
     let mut hasher = Sha256::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| failed(&e))? {
+    while let Some(chunk) = response.chunk().await.map_err(|e| failed(&chain(&e)))? {
         hasher.update(&chunk);
         out.write_all(&chunk).map_err(|e| format!("Could not save the WebView2 installer: {e}"))?;
     }
@@ -183,6 +201,19 @@ async fn download_legacy(name: &str, file: &str, sha256: &str, path: &Path) -> R
         return Err(format!("The WebView2 {LEGACY_VERSION} installer did not download correctly (checksum mismatch). Try again."));
     }
     Ok(())
+}
+
+/// The error and every cause under it. reqwest's own message is only "error sending request
+/// for url (...)"; the reason (a certificate, DNS, a refused connection) is in the sources.
+fn chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, String> {
