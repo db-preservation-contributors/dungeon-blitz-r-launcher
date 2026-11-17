@@ -206,9 +206,10 @@ pub enum SchemeOrder {
 ///
 /// Except on the Windows 7 builds: Flash Player loads through the system's WinINet, and an
 /// unpatched Windows 7 has no TLS 1.2 there, so HTTPS could fail inside Flash Player even though
-/// the launcher's own (rustls) check succeeded.
+/// the launcher's own (rustls) check succeeded. And macOS, where HTTPS-first was never checked
+/// in Flash Player (a Mac player reported the game not opening after 1.13.3).
 pub fn flash_scheme_order() -> SchemeOrder {
-    if cfg!(feature = "win7") {
+    if cfg!(feature = "win7") || PLATFORM == "darwin" {
         SchemeOrder::HttpFirst
     } else {
         SchemeOrder::HttpsFirst
