@@ -252,6 +252,14 @@ package
       private function onFetched(event:Event) : void
       {
          var bytes:ByteArray = ByteArray(fetch.data);
+         if (httpStatus < 400 && !looksLikeSwf(bytes) && /^http:\/\//i.test(gameUrl))
+         {
+            // Plain HTTP can be answered by someone else's page (a network filter, a captive
+            // portal) with a 200; the same address over HTTPS reaches the game server.
+            gameUrl = gameUrl.replace(/^http:/i, "https:");
+            loadGame();
+            return;
+         }
          if (httpStatus >= 400 || !looksLikeSwf(bytes))
          {
             showFetchError((httpStatus > 0 ? "HTTP " + httpStatus + " - " : "") + bytes.length + " bytes");
