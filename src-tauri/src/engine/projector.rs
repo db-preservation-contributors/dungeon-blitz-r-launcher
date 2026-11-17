@@ -218,7 +218,18 @@ pub fn flash_scheme_order() -> SchemeOrder {
 
 pub async fn resolve_swf_url(server_url: &str, order: SchemeOrder) -> String {
     let html = crate::net::get_text(server_url, Duration::from_secs(8), 512 * 1024).await;
-    let found = swf_url_from_page(&html, server_url);
+    let mut found = swf_url_from_page(&html, server_url);
+    if found.is_empty() {
+        // Plain HTTP can come back as someone else's page (a network filter's block page, a
+        // captive portal) with a 200; the game page over HTTPS still names the SWF.
+        if let Some(secure_page) = https_twin(server_url) {
+            let html = crate::net::get_text(&secure_page, Duration::from_secs(8), 512 * 1024).await;
+            found = swf_url_from_page(&html, &secure_page);
+            if let Some(plain) = found.strip_prefix("https://").map(|rest| format!("http://{rest}")) {
+                found = plain;
+            }
+        }
+    }
     let swf = if found.is_empty() { default_swf_url(server_url) } else { found };
     reachable_swf_url(swf, order).await
 }
@@ -270,12 +281,28 @@ async fn reachable_swf_url(swf: String, order: SchemeOrder) -> String {
     swf
 }
 
-/// True when a GET of `url` ends (after redirects) in a 2xx. Only the headers are read.
+/// True when a GET of `url` ends (after redirects) in a 2xx whose body starts as a SWF. Only the
+/// first bytes are read. A Mac player's plain HTTP (2026-11-17) answered the game's address with a
+/// 200 and an 8674-byte page that was not the game, so a 2xx alone says nothing.
 async fn answers(url: &str) -> bool {
-    match crate::net::client().get(url).timeout(Duration::from_secs(10)).header("Cache-Control", "no-store").send().await {
-        Ok(response) => response.status().is_success(),
-        Err(_) => false,
+    let request = crate::net::client().get(url).timeout(Duration::from_secs(10)).header("Cache-Control", "no-store");
+    let Ok(mut response) = request.send().await else { return false };
+    if !response.status().is_success() {
+        return false;
     }
+    let mut head: Vec<u8> = Vec::new();
+    while head.len() < 3 {
+        match response.chunk().await {
+            Ok(Some(chunk)) => head.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    looks_like_swf(&head)
+}
+
+/// FWS, CWS or ZWS: an uncompressed, zlib or LZMA SWF.
+pub fn looks_like_swf(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && matches!(bytes[0], b'F' | b'C' | b'Z') && bytes[1] == b'W' && bytes[2] == b'S'
 }
 
 pub fn flash_render_mode() -> String {
@@ -482,6 +509,16 @@ mod tests {
             default_swf_url("http://dungeonblitzr.theminesa.studio/"),
             "http://dungeonblitzr.theminesa.studio/p/cbp/DungeonBlitz.swf?fv=cbp&gv=cbp"
         );
+    }
+
+    #[test]
+    fn swf_signature_only() {
+        assert!(looks_like_swf(b"CWS\x0a"));
+        assert!(looks_like_swf(b"FWS"));
+        assert!(looks_like_swf(b"ZWS\x0d"));
+        assert!(!looks_like_swf(b"<!DOCTYPE html>"));
+        assert!(!looks_like_swf(b"CW"));
+        assert!(!looks_like_swf(b""));
     }
 
     #[test]
