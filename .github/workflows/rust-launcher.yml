@@ -28,7 +28,7 @@ jobs:
     name: Tests
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Tauri dependencies
         run: |
           sudo apt-get update
@@ -49,13 +49,13 @@ jobs:
     needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -66,7 +66,7 @@ jobs:
           sdk=$(node tools/fetch-air-sdk.js --platform win32 | tail -1)
           AIR_SDK_HOME="$sdk" node tools/build-air.js
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: air-win32
           path: |
@@ -94,9 +94,9 @@ jobs:
           - { os: macos-15-intel, label: macOS, platform: darwin, target: x86_64-apple-darwin, toolchain: stable, air: build, name: mac-x64 }
           - { os: ubuntu-22.04, label: Linux, platform: linux, target: x86_64-unknown-linux-gnu, toolchain: stable, air: windows, name: linux }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -140,7 +140,7 @@ jobs:
 
       - name: Set up Java for the AIR SDK
         if: matrix.air == 'build'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -154,7 +154,7 @@ jobs:
 
       - name: Take the Windows AIR engine
         if: matrix.air == 'windows'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: air-win32
           path: .
@@ -358,7 +358,7 @@ jobs:
           echo "Signed $signed updater artifact(s)."
           ls -la dist-rs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: rust-launcher-${{ matrix.name }}
           path: dist-rs/*
@@ -379,11 +379,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           pattern: rust-launcher-*
           path: dist-rs
