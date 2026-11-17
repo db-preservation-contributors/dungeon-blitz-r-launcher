@@ -150,3 +150,33 @@ jobs:
           code=$(curl -sS -o /dev/null -w '%{http_code}' "$PUBLIC_URL/launcher/latest.json" || true)
           echo "Public URL answered $code from this runner."
           if [ "$code" != "200" ]; then echo "::warning::$PUBLIC_URL answered $code from the runner; check it from a browser."; fi
+
+      - name: Prune old launcher versions from R2
+        # Runs only after the check above, so a failed upload never removes the previous version.
+        if: env.SKIP != '1'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ vars.R2_BUCKET }}
+          KEEP: "2"
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # Version folders under launcher/, newest first. The version just published always stays,
+          # and the newest $KEEP versions stay. latest.json and updater.json are files, not folders,
+          # so they are never touched.
+          mapfile -t versions < <(aws s3 ls "s3://$BUCKET/launcher/" --endpoint-url "$ENDPOINT" \
+            | awk '$1 == "PRE" {print $2}' | tr -d / | sort -rV)
+          if ! printf '%s\n' "${versions[@]}" | grep -qx "$version"; then
+            echo "::error::$version is not in the bucket; refusing to prune."; exit 1
+          fi
+          kept=0
+          for v in "${versions[@]}"; do
+            if [ "$v" = "$version" ] || [ "$kept" -lt "$KEEP" ]; then
+              kept=$((kept + 1)); echo "keep $v"; continue
+            fi
+            echo "delete launcher/$v/"
+            aws s3 rm "s3://$BUCKET/launcher/$v/" --recursive --endpoint-url "$ENDPOINT"
+          done
