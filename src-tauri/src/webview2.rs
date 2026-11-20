@@ -11,8 +11,9 @@
 //! saw "The installer finished, but WebView2 is still not available." So the Windows 7 build
 //! downloads the 109 installer itself (Microsoft's own `MicrosoftEdge_X86/X64_109.0.1518.140.exe`
 //! from Microsoft's download service, checked against the SHA-256 below) and runs it with
-//! `--msedgewebview`, which installs only the WebView2 runtime, for this Windows account, with no
-//! Edge Update and no administrator prompt. The bootstrapper stays as the fallback.
+//! `--msedgewebview --user-level`, which installs only the WebView2 runtime, for this Windows
+//! account, with no Edge Update and no administrator prompt. If that fails it runs again with
+//! `--system-level` behind an administrator prompt. The bootstrapper stays as the fallback.
 //!
 //! Microsoft's download service (`msedge.api.cdp.microsoft.com`) has a certificate from the
 //! Windows Update PKI, which chains to "Microsoft Root Certificate Authority 2011". That root is
@@ -126,15 +127,74 @@ fn install_legacy() -> Result<(), String> {
         let _ = std::fs::remove_file(&path);
         return Err(error);
     }
-    let status = std::process::Command::new(&path).arg("--msedgewebview").status();
+    let user = run_legacy(&path, false);
+    let result = if user.is_ok() && tauri::webview_version().is_ok() {
+        user
+    } else {
+        run_legacy(&path, true).map_err(|system| match user {
+            Err(user) => format!("{user}\n{system}"),
+            Ok(()) => system,
+        })
+    };
     let _ = std::fs::remove_file(&path);
-    match status {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!(
-            "The WebView2 {LEGACY_VERSION} installer stopped with code {}.",
-            status.code().map_or_else(|| "?".to_string(), |c| format!("{c} (0x{:08X})", c as u32))
+    result
+}
+
+/// Edge's setup needs the install level spelled out; with `--msedgewebview` alone it exits with
+/// 53 (UNSUPPORTED_OPTION). These are the switches Edge Update itself passes. The per-account
+/// install runs first; the machine-wide one asks for administrator rights.
+fn run_legacy(path: &Path, system: bool) -> Result<(), String> {
+    let level = if system { "--system-level" } else { "--user-level" };
+    let args = ["--msedgewebview", "--verbose-logging", "--do-not-launch-msedge", level];
+    let label = if system { "for all accounts" } else { "for this account" };
+    let code = if system {
+        run_elevated(path, &args.join(" "))
+    } else {
+        std::process::Command::new(path)
+            .args(args)
+            .status()
+            .map_err(|e| e.to_string())
+            .map(|status| status.code().map_or(u32::MAX, |c| c as u32))
+    };
+    match code {
+        Ok(0) => Ok(()),
+        Ok(code) => Err(format!(
+            "The WebView2 {LEGACY_VERSION} installer ({label}) stopped with code {code} (0x{code:08X})."
         )),
-        Err(error) => Err(format!("The WebView2 {LEGACY_VERSION} installer did not start: {error}")),
+        Err(error) => Err(format!("The WebView2 {LEGACY_VERSION} installer ({label}) did not start: {error}")),
+    }
+}
+
+fn run_elevated(path: &Path, args: &str) -> Result<u32, String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject, INFINITE};
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |s: &std::ffi::OsStr| {
+        use std::os::windows::ffi::OsStrExt;
+        s.encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>()
+    };
+    let (verb, file, params) = (wide("runas".as_ref()), wide(path.as_os_str()), wide(args.as_ref()));
+    unsafe {
+        let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOCLOSEPROCESS;
+        info.lpVerb = verb.as_ptr();
+        info.lpFile = file.as_ptr();
+        info.lpParameters = params.as_ptr();
+        info.nShow = SW_SHOWNORMAL;
+        if ShellExecuteExW(&mut info) == 0 || info.hProcess.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        WaitForSingleObject(info.hProcess, INFINITE);
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(info.hProcess, &mut code);
+        CloseHandle(info.hProcess);
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(code)
     }
 }
 
