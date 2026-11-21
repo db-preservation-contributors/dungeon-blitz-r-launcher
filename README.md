@@ -334,6 +334,23 @@ a supported runtime. A build plays in it whenever `vendor/air/<platform>/` has a
   its URL. The URL's `clientrev` is the SWF's content hash, so a start whose build is already
   there plays it without downloading it, and a new build is downloaded once and replaces the
   old one. A URL without a `clientrev` is never kept.
+- The level and art SWFs are kept too (`game-files/<host>/` beside it), by content hash
+  (`air/src/GameAssetCache.as`). At start the app fetches the server's `/asset-manifest.json`,
+  which names each game file by its hash. A file already on disk loads with no request; a new or
+  changed one is downloaded once from `/_h/<hash>` (falling back to HTTPS, then to the game's own
+  URL), checked against its hash and kept; files the manifest no longer names are deleted. When
+  the manifest cannot be fetched, the last one is used. The game SWF, `Game.swz` and the XML files
+  are computed per server, are not in the manifest and still come from the server.
+- In AIR the game sees no download progress for a SWF until all of it is in, and it restarts a
+  download with no progress after 10 s (+5 s per attempt). Each restart used to start one more
+  download of the same file beside the ones still running, so on a slow connection a file never
+  finished (the loading screen's climbing `R=`). Now a restart joins the running download, and
+  only one with no bytes for 20 s is started again.
+- The game's loads reach the cache through `air/src/AirCompat.as`, the app's own copy of the
+  game's AirCompat: a class the parent ApplicationDomain defines wins over the child's. It is
+  used only when the game SWF carries the same `AirCompat.SOURCE_DIGEST`; any other game runs in
+  a domain of its own with its own AirCompat, as before, and keeps nothing. When the server's
+  `scripts/air-compat/AirCompat.as` changes, update this copy and its digest to match.
 - While the SWF downloads, the window shows a progress bar. When it cannot be had, it says why
   in a player's words (server busy, version missing, no connection, a broken download), with
   **Try again**, an automatic retry after 20 s, and the technical detail underneath. Both
