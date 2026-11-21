@@ -56,6 +56,10 @@ package
     * it without asking the server for it, and a new build is downloaded once and replaces the old
     * one. A URL without a clientrev is never cached.
     *
+    * The level and art SWFs the game loads are kept on disk too, by content hash, and a file the
+    * game restarts while it is still downloading is not downloaded twice: see GameAssetCache, and
+    * AirCompat for how the game's loads reach it.
+    *
     * While the SWF downloads, a loading screen shows its progress. When it cannot be had, an error
     * screen says what happened in a player's words, with Try again (and an automatic retry) and
     * the technical detail underneath. Both wear theminesa.studio/dungeon-blitz-r.html's look, as
@@ -189,6 +193,8 @@ package
       private function loadGame() : void
       {
          stopRetryTimer();
+         // The level and art files' manifest, fetched while the game SWF is read or downloaded.
+         GameAssetCache.start(gameUrl);
          var cached:ByteArray = readCached();
          if (cached)
          {
@@ -271,7 +277,7 @@ package
 
       private function runGame(bytes:ByteArray) : void
       {
-         var context:LoaderContext = new LoaderContext(false, new ApplicationDomain(ApplicationDomain.currentDomain));
+         var context:LoaderContext = new LoaderContext(false, gameDomain(bytes));
          context.allowCodeImport = true;
          context.parameters = flashVars(gameUrl);
          var loader:Loader = new Loader();
@@ -288,6 +294,70 @@ package
          addChild(fullScreenButton);
          loader.loadBytes(bytes, context);
          fitGame();
+      }
+
+      /**
+       * Where the game runs. A child of this app's domain sees this app's AirCompat instead of its
+       * own, which sends its level and art files through GameAssetCache; that is only done for a
+       * game whose AirCompat is the one this app's copy was made from. Any other game runs in a
+       * domain of its own, with its own AirCompat, as it would in Flash Player.
+       */
+      private static function gameDomain(bytes:ByteArray) : ApplicationDomain
+      {
+         if (carries(bytes, AirCompat.SOURCE_DIGEST))
+         {
+            GameAssetCache.gameDomain = new ApplicationDomain(ApplicationDomain.currentDomain);
+            return GameAssetCache.gameDomain;
+         }
+         trace("[DungeonBlitzAir] the game's AirCompat is not " + AirCompat.SOURCE_DIGEST + "; game files are not kept");
+         return new ApplicationDomain(null);
+      }
+
+      /** True when the SWF's code (FWS, or CWS once inflated) contains `text`. */
+      private static function carries(swf:ByteArray, text:String) : Boolean
+      {
+         if (!swf || swf.length < 8 || swf[1] != 0x57 || swf[2] != 0x53)
+         {
+            return false;
+         }
+         var body:ByteArray = new ByteArray();
+         body.writeBytes(swf, 8);
+         if (swf[0] == 0x43)
+         {
+            try
+            {
+               body.uncompress();
+            }
+            catch (error:Error)
+            {
+               return false;
+            }
+         }
+         else if (swf[0] != 0x46)
+         {
+            return false;
+         }
+         var needle:ByteArray = new ByteArray();
+         needle.writeUTFBytes(text);
+         var first:int = needle[0];
+         var last:int = body.length - needle.length;
+         for (var at:int = 0; at <= last; at++)
+         {
+            if (body[at] != first)
+            {
+               continue;
+            }
+            var i:int = 1;
+            while (i < needle.length && body[at + i] == needle[i])
+            {
+               i++;
+            }
+            if (i == needle.length)
+            {
+               return true;
+            }
+         }
+         return false;
       }
 
       // ---- the disk cache ----------------------------------------------------------------------
